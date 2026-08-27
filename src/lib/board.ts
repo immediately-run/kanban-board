@@ -166,20 +166,19 @@ export async function readBoard(store: Store, boardId: string, previous?: BoardS
 
 const now = () => new Date().toISOString();
 
-export async function writeBoardMeta(store: Store, meta: BoardMeta): Promise<BoardMeta> {
-  const next = { ...meta, updated: now() };
-  const { id, ...body } = next;
+// Writes persist EXACTLY the in-memory record (callers stamp `updated`), so a
+// member's own write never differs from its optimistic state — otherwise the
+// poll would report the writer's own change as "updated from the space".
+export async function writeBoardMeta(store: Store, meta: BoardMeta): Promise<void> {
+  const { id, ...body } = meta;
   void id;
-  await writeJson(boardFile(store, meta.id), body);
-  return next;
+  await writeJson(boardFile(store, id), body);
 }
 
-export async function writeCard(store: Store, boardId: string, card: Card): Promise<Card> {
-  const next = { ...card, updated: now() };
-  const { id, ...body } = next;
+export async function writeCard(store: Store, boardId: string, card: Card): Promise<void> {
+  const { id, ...body } = card;
   void id;
-  await writeJson(cardFile(store, boardId, card.id), body);
-  return next;
+  await writeJson(cardFile(store, boardId, id), body);
 }
 
 export async function deleteCard(store: Store, boardId: string, cardId: string): Promise<void> {

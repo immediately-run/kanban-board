@@ -159,7 +159,7 @@ function ColumnView({
           const slot = isDragged ? -1 : visible.indexOf(c);
           return (
           <div key={c.id} className="col-slot">
-            {placeholderAt === slot && placeholder}
+            {slot >= 0 && placeholderAt === slot && placeholder}
             <CardItem
               card={c}
               columns={columns}

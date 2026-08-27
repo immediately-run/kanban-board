@@ -133,7 +133,7 @@ export const newId = (): string =>
  * differs from the last poll. Returns a stop function.
  */
 export function pollDir(dir: string, onChange: () => void, intervalMs = 3000): () => void {
-  let last = '';
+  let last: string | null = null; // null = never polled (an empty dir is a valid '' signature)
   let stopped = false;
   const tick = async () => {
     if (stopped) return;
@@ -151,7 +151,7 @@ export function pollDir(dir: string, onChange: () => void, intervalMs = 3000): (
           }),
         )
       ).join('|');
-      if (last && sig !== last) onChange();
+      if (last !== null && sig !== last) onChange();
       last = sig;
     } catch {
       /* dir missing yet */

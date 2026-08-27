@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 
 interface Props {
   onClose: () => void;
@@ -8,9 +8,29 @@ interface Props {
   label: string;
 }
 
-/** Small anchored menu. The parent must be `position: relative`. */
+/**
+ * Small anchored menu. Positioned `fixed` from the parent (`.pop-anchor`) rect so
+ * it is never clipped by a scrolling column, and kept inside the viewport.
+ */
 function Popover({ onClose, children, align = 'right', label }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const anchor = el?.parentElement;
+    if (!el || !anchor) return;
+    const a = anchor.getBoundingClientRect();
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = align === 'right' ? a.right - w : a.left;
+    left = Math.max(8, Math.min(left, vw - w - 8));
+    let top = a.bottom + 6;
+    if (top + h > vh - 8) top = Math.max(8, a.top - h - 6);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [align]);
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {

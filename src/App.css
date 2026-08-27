@@ -81,12 +81,10 @@ select { appearance: none; }
 /* ---- popover ---- */
 .pop-anchor { position: relative; }
 .pop {
-  position: absolute; top: calc(100% + 6px); z-index: 30; min-width: 200px;
+  position: fixed; top: 0; left: 0; z-index: 30; min-width: 200px; max-height: calc(100vh - 16px); overflow-y: auto;
   background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-md);
   box-shadow: var(--shadow-pop); padding: 6px; display: flex; flex-direction: column; gap: 2px;
 }
-.pop-right { right: 0; }
-.pop-left { left: 0; }
 .pop-title { font: 400 11px/1 var(--mono); color: var(--ink-3); text-transform: uppercase; letter-spacing: .08em; padding: 6px 8px 4px; }
 .pop-sep { height: 1px; background: var(--line); margin: 4px 0; }
 .pop-item {
