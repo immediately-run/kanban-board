@@ -75,12 +75,55 @@ export async function openRememberedSpace(spaceId: string, sub = ''): Promise<St
 // ── small fs helpers ───────────────────────────────────────────────────────────
 
 export async function ensureDir(path: string): Promise<void> {
-  await fs.promises.mkdir(path, { recursive: true });
+  try {
+    await fs.promises.mkdir(path, { recursive: true });
+  } catch (e) {
+    // Two concurrent recursive mkdirs race on the host port and one loses with
+    // EEXIST even though the directory now exists (observed 2026-08-27).
+    if ((e as { code?: string }).code !== 'EEXIST') throw e;
+  }
+}
+
+/**
+ * HOST BUG WORKAROUND (2026-08-27): overwriting a file on a `/mnt` mount with
+ * SHORTER content leaves the old tail bytes in place (the inode size is not
+ * truncated), so `{"b":1}` written over `{"a":"0123456789"}` reads back as
+ * `{"b":1}123456789"}`. Until the host truncates, never write shorter: pad
+ * JSON with trailing whitespace up to the previous size (JSON.parse ignores it).
+ */
+async function padToExistingSize(path: string, text: string): Promise<string> {
+  try {
+    const { size } = await fs.promises.stat(path);
+    const len = new TextEncoder().encode(text).length;
+    if (size > len) return text + '\n' + ' '.repeat(size - len - 1);
+  } catch {
+    /* new file */
+  }
+  return text;
+}
+
+/** Strip a stale tail left by the host bug above when reading JSON written by an
+ *  older build: take the longest prefix that parses. */
+function parseJsonLenient<T>(raw: string): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    const closers = ['}', ']', '"'];
+    for (let i = raw.length - 1; i > 0; i--) {
+      if (!closers.includes(raw[i])) continue;
+      try {
+        return JSON.parse(raw.slice(0, i + 1)) as T;
+      } catch {
+        /* keep looking */
+      }
+    }
+    throw e;
+  }
 }
 
 export async function readJson<T>(path: string, fallback: T): Promise<T> {
   try {
-    return JSON.parse(await fs.promises.readFile(path, 'utf8')) as T;
+    return parseJsonLenient<T>(await fs.promises.readFile(path, 'utf8'));
   } catch {
     return fallback;
   }
@@ -89,7 +132,7 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
 export async function writeJson(path: string, value: unknown): Promise<void> {
   const dir = path.slice(0, path.lastIndexOf('/'));
   if (dir) await ensureDir(dir);
-  await fs.promises.writeFile(path, JSON.stringify(value, null, 2), 'utf8');
+  await fs.promises.writeFile(path, await padToExistingSize(path, JSON.stringify(value, null, 2)), 'utf8');
 }
 
 export async function readText(path: string): Promise<string | null> {
@@ -103,6 +146,8 @@ export async function readText(path: string): Promise<string | null> {
 export async function writeText(path: string, text: string): Promise<void> {
   const dir = path.slice(0, path.lastIndexOf('/'));
   if (dir) await ensureDir(dir);
+  // Plain text can't be padded; remove first so the host bug above can't leave a tail.
+  await removeFile(path);
   await fs.promises.writeFile(path, text, 'utf8');
 }
 
