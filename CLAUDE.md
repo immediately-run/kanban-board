@@ -1,6 +1,16 @@
-# Working in this repo
+# Working in this repo — kanban-board
 
-This is an **immediately.run app**: React + TypeScript that loads from GitHub and
+This is the **kanban-board** immediately.run app: boards → columns → cards, every
+card its own JSON file, shareable through a platform space. Code map:
+
+- `src/lib/store.ts` — the canonical persistence layer (private settings store,
+  shared-space pick/create/re-open, `pollDir`). Don't fork it; extend around it.
+- `src/lib/board.ts` — data model, on-disk layout, fractional ordering, seeding.
+- `src/hooks/useStores.ts` / `useBoard.ts` / `useCardDrag.ts` — boot + sharing,
+  optimistic mutations + polling, pointer-event drag and drop.
+- `src/components/*` — one component per file; `Board` → `ColumnView` → `CardItem`.
+
+It is also an **immediately.run app**: React + TypeScript that loads from GitHub and
 transpiles in the browser (no server, no build step at runtime). Keep the rules
 below or the app breaks *only* on immediately.run while still looking fine in
 local `vite dev` — the most common silent failure.

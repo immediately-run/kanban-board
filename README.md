@@ -1,135 +1,88 @@
-# immediately.run — starter template
+# Kanban board
 
-A ready-to-run starter for building apps on
-[immediately.run](https://immediately.run): React + TypeScript + Vite, wired to
-the brand design system, with the project layout immediately.run expects.
+A Trello-style board for [immediately.run](https://immediately.run) where **every
+card is a file**. Boards have columns, columns have cards; drag cards between
+columns (mouse, pen or touch), edit them in a modal, and — when you want a team on
+it — put the board in a shared space so everyone with access sees the same board
+and can move cards at the same time.
 
-## Try it instantly
+## Try it
 
-Try this template on [immediately.run](https://immediately.run/present/github/immediately-run/new-project-template/main/files/src/App.tsx)
+Open it on immediately.run:
 
-> Using this as a starting point for your own app? After you push to your repo,
-> update the link above to
-> `https://immediately.run/present/github/<owner>/<repo>/<ref>/files/src/App.tsx`.
+<https://immediately.run/present/github/immediately-run/kanban-board/main/files/src/App.tsx>
 
-## Use this template
+On first run you get a board with three columns (To do / Doing / Done) and four
+sample cards. No sign-in prompt, no consent dialog: private boards live in the
+app's own per-user folder.
 
-1. Create a new repo from this template (or copy the files).
-2. `npm install`
-3. `npm run dev` and start editing `src/App.tsx`.
-4. Push to GitHub and open it on immediately.run with the link above.
+## What you can do
 
-## Fast loading on immediately.run (auto-cache)
+- **Boards** — switch, create, rename and delete boards from the board menu in the
+  top bar. Each store (private, or each shared space) remembers the board you had open.
+- **Columns** — add, rename (double-click the name or use the column menu), move
+  left/right, delete (its cards move to the first remaining column).
+- **Cards** — quick-add at the bottom of a column; click a card to edit title,
+  description, labels, due date and column, or delete it. Cards show who last
+  touched them.
+- **Drag and drop** — drag a card by its body (mouse) or by the grip handle on its
+  right edge (touch), drop it in any column at any position. Every card also has a
+  "Move to…" menu (top / bottom of any column) as the keyboard- and
+  mobile-friendly fallback.
+- **Share** — the "Share" button opens the platform's space picker
+  (`pickSharedStore()`) or creates a new space (`createSharedStore(name)`). The
+  chosen space is remembered and re-opened next time. With a read-only grant the
+  board is view-only: editing affordances are hidden.
 
-immediately.run normally reads your sources from the GitHub API, which is slow
-and rate-limited for anonymous visitors. This template ships a GitHub Action
-([`.github/workflows/cache.yml`](./.github/workflows/cache.yml)) that, on every
-push to `main`, builds a pre-cached zip of your repo and publishes it to your
-repo's **own GitHub Pages**. immediately.run finds it automatically at
-`https://<owner>.github.io/<repo>/cached_repositories/main.zip` and loads from
-there — falling back to the API if it's missing.
+## How data is stored
 
-The cache also embeds a manifest sidecar, so visitors can push edits back to
-GitHub even when the app was loaded from the zip.
-
-### Enable the cache (one-time)
-
-For a repo in your **own** GitHub account or org, there's a single one-time step:
-
-1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
-2. Push to `main` (or re-run the **Cache for immediately.run** workflow from the
-   Actions tab).
-
-That's it — no tokens and no secrets to configure. The workflow builds the zip and
-publishes it to your repo's Pages; immediately.run finds it automatically on the
-next load. The first publish can lag a push by up to ~10 minutes of GitHub Pages
-CDN caching. If the app still loads from the API, check that the workflow run
-succeeded and that Pages shows a green **github-pages** deployment.
-
-> **immediately-run org repos** skip even that step: the org's internal **deploy
-> GitHub App** self-provisions Pages on the first run (it holds Pages +
-> Administration write and its `DEPLOY_APP_ID` / `DEPLOY_APP_PRIVATE_KEY` are org
-> secrets). That App is org-internal — repos outside the org neither have nor need
-> it, and `cache.yml` automatically falls back to the manual step above.
-
-### Always run the newest commit
-
-By default the cached version is served even if it's a few minutes behind
-`main`. If your app must always reflect the very latest commit, add this to
-`package.json`:
-
-```jsonc
-{
-  "immediately.run": {
-    "requireLatest": true
-  }
-}
-```
-
-immediately.run still boots instantly from the cache, then checks in the
-background (one API request) whether the cache is current and, if not, reloads
-from GitHub.
-
-## How it's organized
-
-immediately.run renders the **default export of `src/App.tsx`** — that's the
-entry point, not `main.tsx`.
+Everything is plain JSON on the immediately.run filesystem, so it is
+inspectable and hackable from the platform's file explorer:
 
 ```
-src/
-  main.tsx              # local vite dev/build entry only — immediately.run IGNORES this
-  App.tsx               # ROOT: default export + imports the global CSS
-  index.css             # fonts, design tokens (dark + light), resets
-  App.css               # layout + component styles
-  mdx.d.ts              # type shim so `import X from './x.mdx'` works
-  components/           # one default-exported React component per file
-  data/                 # typed data arrays (NO components/JSX here)
-  hooks/                # custom hooks (NO components here)
-  assets/               # images you import, e.g. import logo from './assets/logo.png'
+<store>/boards/<boardId>/board.json            name, column order + column names
+<store>/boards/<boardId>/cards/<cardId>.json   title, description, column, order,
+                                               labels[], due, by, created, updated
 ```
 
-The included page shows the core patterns: a data array mapped to cards
-(`data/features.ts` → `components/Features.tsx`), a custom hook
-(`hooks/useTheme.ts` → `components/ThemeSwitch.tsx`), and local React state
-(`components/Counter.tsx`).
+`<store>` is the app's private settings folder by default, or
+`<space>/kanban-board/` once the board is shared.
 
-## Filesystem access (`fs`)
+**One card = one file.** Two people moving different cards at the same time write
+different files, so nothing gets clobbered; a conflict is only ever possible on
+the *same* card, where the last save wins. Card order inside a column is a
+fractional index (`order`), so a move rewrites exactly one file (the moved card)
+and only renumbers a column when the gaps have collapsed.
 
-immediately.run apps can read and write a filesystem by importing `fs` (async
-only — `fs.promises.*` and callback style). This template has local-dev support
-for it built in via [`@immediately-run/dev-fs`](https://github.com/immediately-run/dev-fs),
-a Vite plugin (already wired into `vite.config.ts`) that bridges the same
-filesystem to your real local disk during `vite dev`. See that repo for the
-supported API and details.
+## Multi-user notes
 
-```ts
-import fs from 'fs'
+- Shared spaces have no remote change events, so the app polls the open board's
+  `cards/` directory (and `board.json`) every 2.5 s while a shared store is open,
+  and shows a small "Updated from *space*" toast when a poll brings in someone
+  else's change. Your own writes don't toast.
+- The app can't invite anyone. Share the space itself from the platform's Spaces
+  page; members then open the app and the board appears (the space is remembered
+  in the private config, so it re-opens on the next visit).
+- A read-only grant (`mode: 'ro'`) hides add/edit/drag/delete controls and opens
+  cards in a view-only modal.
 
-await fs.promises.writeFile('/data/notes.txt', 'hello', 'utf8')
-const text = await fs.promises.readFile('/data/notes.txt', 'utf8')
-```
-
-`main.tsx` runs a one-off round-trip smoke test in dev — check the browser
-console for the `[dev-fs]` group, and delete it freely.
-
-## The rules that keep it working on immediately.run
-
-See [`CLAUDE.md`](./CLAUDE.md) for the full list. The essentials:
-
-- **Global CSS is imported from `App.tsx`, never only from `main.tsx`.**
-- **A file that exports a component exports *only* components** — data, consts,
-  and helpers go in `data/`, `hooks/`, or `lib/`. `npm run lint` enforces this.
-- **Pull colors, fonts, radii, and shadows from the tokens in `index.css`**
-  rather than hard-coding values.
-
-## Develop
-
-Requires Node.js 20.19+ or 22.12+.
+## Local development
 
 ```bash
 npm install
-npm run dev      # local dev server
-npm run build    # tsc -b && vite build — must pass with no type errors
-npm run lint     # eslint — enforces the React Fast Refresh / HMR rule
-npm run preview  # serve the production build
+npm run dev      # vite dev; the fs module writes to ./devfs-playground/ (git-ignored)
+npm run build    # tsc + vite build
+npm run lint
 ```
+
+Under `vite dev` the private store lives in `devfs-playground/settings/data/` and
+"Share" switches to `devfs-playground/shared/` without any prompts — open two
+browser tabs, share in both, and you can watch the poll pick up moves made in the
+other tab.
+
+To run the working tree inside the real host (consent prompts, real grants,
+read-only mounts): `immediately.run dev . --origin https://local.immediately.run`.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
