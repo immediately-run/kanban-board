@@ -24,7 +24,8 @@ app's own per-user folder.
   left/right, delete (its cards move to the first remaining column).
 - **Cards** — quick-add at the bottom of a column; click a card to edit title,
   description, labels, due date and column, or delete it. Cards show who last
-  touched them.
+  touched them — the host's login, or the "Your name" you set in the Share
+  dialog when the host gives the app no login.
 - **Drag and drop** — drag a card by its body (mouse) or by the grip handle on its
   right edge (touch), drop it in any column at any position. Every card also has a
   "Move to…" menu (top / bottom of any column) as the keyboard- and

@@ -20,6 +20,8 @@ export interface AppConfig {
   spaceName?: string;
   /** Last opened board per store ("private" or the spaceId). */
   lastBoard?: Record<string, string>;
+  /** Shown as the card's "by" when the host gives the app no login (stage apps). */
+  displayName?: string;
 }
 
 export interface StoresState {
@@ -143,6 +145,11 @@ export function useStores() {
 
   const clearError = useCallback(() => setLastError(null), []);
 
+  const setDisplayName = useCallback(
+    (name: string) => void saveConfig({ displayName: name.trim() || undefined }),
+    [saveConfig],
+  );
+
   return {
     ...state,
     store: state.shared ?? state.privateStore,
@@ -150,6 +157,7 @@ export function useStores() {
     createShared,
     leaveShared,
     rememberBoard,
+    setDisplayName,
     lastError,
     clearError,
   };

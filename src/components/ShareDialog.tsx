@@ -10,10 +10,31 @@ interface Props {
   onCreate: (name: string) => void;
   onLeave: () => void;
   onClose: () => void;
+  /** Private-config display name; shown as "by" on cards this person touches. */
+  displayName: string;
+  onSetName: (name: string) => void;
 }
 
-function ShareDialog({ shared, busy, onPick, onCreate, onLeave, onClose }: Props) {
+function ShareDialog({ shared, busy, onPick, onCreate, onLeave, onClose, displayName, onSetName }: Props) {
   const [name, setName] = useState('');
+  const [me, setMe] = useState(displayName);
+  const saveMe = () => {
+    if (me.trim() !== displayName) onSetName(me);
+  };
+  const nameRow = (
+    <label className="row name-row">
+      <span className="small">Your name</span>
+      <input
+        value={me}
+        onChange={(e) => setMe(e.target.value)}
+        onBlur={saveMe}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+        placeholder="Shown on cards you touch"
+        aria-label="Your name"
+        maxLength={40}
+      />
+    </label>
+  );
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -40,6 +61,7 @@ function ShareDialog({ shared, busy, onPick, onCreate, onLeave, onClose }: Props
               <Icon name="lock" size={16} /> Back to my private boards
             </button>
           </div>
+          {nameRow}
         </div>
       ) : (
         <div className="share-body">
@@ -67,6 +89,7 @@ function ShareDialog({ shared, busy, onPick, onCreate, onLeave, onClose }: Props
             Invite people from the platform's Spaces page afterwards — the app itself can't invite anyone. Your private
             boards stay where they are.
           </p>
+          {nameRow}
         </div>
       )}
     </Dialog>

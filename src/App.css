@@ -212,6 +212,9 @@ body.is-dragging .card { cursor: grabbing; }
 .card-view .desc { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .share-body { display: flex; flex-direction: column; gap: 12px; }
 .share-body p { line-height: 1.5; }
+.name-row { align-items: center; gap: 10px; }
+.name-row span { white-space: nowrap; }
+.name-row input { flex: 1; }
 
 /* ---- misc ---- */
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px; text-align: center; }

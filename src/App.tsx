@@ -18,8 +18,9 @@ import TopBar from './components/TopBar';
 
 function App() {
   const auth = useAuth();
-  const by = auth.user?.login || 'someone';
   const stores = useStores();
+  // Stage apps get no login from the host (`user` is null), so let people name themselves.
+  const by = auth.user?.login || stores.config.displayName || 'someone';
   const { store } = stores;
   const { toasts, push, dismiss } = useToasts();
 
@@ -138,6 +139,8 @@ function App() {
         <ShareDialog
           shared={stores.shared}
           busy={shareBusy}
+          displayName={stores.config.displayName ?? ''}
+          onSetName={stores.setDisplayName}
           onPick={() => void runShare(stores.openShared)}
           onCreate={(name) => void runShare(() => stores.createShared(name))}
           onLeave={() => {
