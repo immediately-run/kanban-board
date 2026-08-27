@@ -11,9 +11,3 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
-
-// Dev-only: prove the local `fs` bridge round-trips against your disk. Stripped
-// from production builds; immediately.run never loads this file. Remove freely.
-if (import.meta.env.DEV) {
-  void import('./dev/fsSmokeTest').then((m) => m.runDevFsSmokeTest())
-}
