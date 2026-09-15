@@ -16,7 +16,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     server: {
       deps: {
         // `board.ts` reaches the SDK through `store.ts` (for the `Store` type and the

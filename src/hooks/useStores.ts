@@ -66,33 +66,80 @@ export function useStores() {
   // space). No input means this is the ordinary boot.
   const taskInput = useTaskInput();
   const isCallee = taskInput?.task === OPEN_DECLARED_TASK;
-  const taskStore = storeFromTaskInput(taskInput, useMounts() ?? []);
+  const resolved = storeFromTaskInput(taskInput, useMounts() ?? []);
+
+  // THE LATCH, and it is load-bearing twice over.
+  //
+  // `storeFromTaskInput` is pure and returns a FRESH object each render. Handed to
+  // `App.tsx` that way it never converges: `App` compares `store !== prevStore` during
+  // render to reset its selection, so a new identity every render is an infinite
+  // render-phase update — React gives up with "Too many re-renders" and task mode does
+  // not run at all. `useBoard` keys its boot effect on the same identity, so it would
+  // also re-run the list-and-seed on every render.
+  //
+  // And once a delegation has resolved it is FINAL for the life of this instance, which
+  // is what stops the grace timer below re-arming: the mount set can go empty later (a
+  // sign-out tears every mount down, `MountRemoveReason`), and without the latch that
+  // would replace an open board with a failure message and cancel a task the reader is
+  // still using. Grove latches the same way and for the same reason
+  // (`useOpenWikiBoot.ts` — "the module IS the latch").
+  //
+  // The latch is STATE, not a ref: a ref read during render is exactly what
+  // `react-hooks/refs` forbids, and the value is needed for rendering. This is the
+  // documented adjust-state-during-render shape (the same one `App.tsx` uses to reset
+  // its selection), and it converges after one extra render because the condition is
+  // false once something is latched.
+  const [taskStore, setTaskStore] = useState<Store | null>(null);
+  if (resolved && !taskStore) setTaskStore(resolved);
   // Written synchronously by the boot effect and by saveConfig (never during
   // render), so back-to-back saves never read a stale config.
   const privRef = useRef<Store | null>(null);
   const configRef = useRef<AppConfig>({});
 
+  // Read by the boot effect AFTER each await. The effect's own `isCallee` is the value
+  // at the render that started it, and the host delivers `task-input` from an effect once
+  // the bundle is interactive — so a genuine callee can begin the ordinary boot and learn
+  // what it is a moment later. Re-checking a ref is what makes the gate stop the REST of
+  // that boot, rather than only its final `setState`.
+  const calleeRef = useRef(isCallee);
   useEffect(() => {
-    // The gate. A callee opens nothing of its own — not even to read `config.json`,
-    // which would create the settings mount this invocation has no use for.
+    calleeRef.current = isCallee;
+  }, [isCallee]);
+
+  useEffect(() => {
+    // The gate, in two halves. This one stops the boot from STARTING when the input is
+    // already known — the common case, since the host mints the delegation before the
+    // callee boots. The `abandoned()` re-checks below are the other half, for the boot
+    // that had already begun: they stop the space mount and the `config.json` write, not
+    // merely the final `setState`. What the pair guarantees is that a callee neither
+    // grants itself the user's shared space nor writes their config; the settings mount
+    // itself may already have been opened by an in-flight first `await`, which is why
+    // that is not claimed here.
     if (isCallee) return;
     let cancelled = false;
+    const abandoned = () => cancelled || calleeRef.current;
     (async () => {
       const priv = await openPrivateStore('data');
+      if (abandoned()) return;
       const config = await readJson<AppConfig>(configPath(priv), {});
+      if (abandoned()) return;
       let shared: Store | null = null;
-      if (config.spaceId) {
+      if (config.spaceId && !abandoned()) {
+        // The space MOUNT, and the `config.json` write below, are the two side effects
+        // the gate has to stop — not just the `setState`. A callee that reached here
+        // before its input landed must not grant itself the user's shared space, and
+        // must not rewrite their config on the way out.
         shared = await openRememberedSpace(config.spaceId, SHARED_SUB);
         if (!shared) {
           // The grant is gone (revoked / space deleted): forget it.
           delete config.spaceId;
           delete config.spaceName;
-          if (priv.mode === 'rw') await writeJson(configPath(priv), config).catch(() => undefined);
+          if (priv.mode === 'rw' && !abandoned()) await writeJson(configPath(priv), config).catch(() => undefined);
         } else if (shared.name && shared.name !== config.spaceName) {
           config.spaceName = shared.name;
         }
       }
-      if (cancelled) return;
+      if (abandoned()) return;
       privRef.current = priv;
       configRef.current = config;
       setState({ ready: true, privateStore: priv, shared, config, error: null });

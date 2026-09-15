@@ -1,7 +1,7 @@
 // Boards + the open board's cards for one Store, with optimistic mutations and
 // (for shared spaces) a directory poll that pulls other members' changes in.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { cancelTask, completeTask } from '@immediately-run/sdk/tasks';
+import { cancelTask } from '@immediately-run/sdk/tasks';
 import {
   boardDir,
   boardsDir,
@@ -59,10 +59,10 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
   const loading = !!store && (boardsState?.key !== sKey || (!!bKey && loaded?.key !== bKey));
 
   const boardRef = useRef<BoardSnapshot | null>(board);
-  // R3-548: the one-bit ack an `open-declared` callee owes its caller, sent once per
-  // instance. A ref rather than state because the answer must not re-render anything and
-  // must not be re-sent when the board reloads.
-  const acked = useRef(false);
+  // R3-548: a task boot answers its caller AT MOST ONCE, and only to give up. A ref
+  // rather than state because the answer must not re-render anything and must not be
+  // re-sent when the board reloads.
+  const answered = useRef(false);
   const inflight = useRef(0);
   const dirty = useRef(false);
   const cbs = useRef({ onBoardChange, onRemoteUpdate, onError, by });
@@ -98,6 +98,11 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
     let cancelled = false;
     (async () => {
       let list = await listBoards(store);
+      // A `'task'` store never takes this branch: `open-declared` attenuates the dir cap
+      // to `ro` UNCONDITIONALLY (site-main `runTaskInvoke.ts` — "the opener reads the
+      // bytes, never writes them", §4b.3), so a delegated directory with no board in it
+      // renders the empty state rather than being seeded with one. Seeding someone
+      // else's folder would be the wrong answer even if the mount allowed it.
       if (list.length === 0 && store.mode === 'rw') {
         await createBoardOnDisk(store, 'My board', cbs.current.by, true);
         list = await listBoards(store);
@@ -110,6 +115,14 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       if (!cancelled) {
         setBoardsState({ key: sKey, list: [] });
         cbs.current.onError(e instanceof Error ? e.message : 'Could not list boards');
+        // The delegated directory could not even be listed, so there is nothing for the
+        // reader to look at and no later read to fail: answer the caller now rather than
+        // leaving `invokeTask` to the §5.7.1 liveness bound. A directory that lists as
+        // EMPTY is not this case — that is content, and the reader sees the empty state.
+        if (store.kind === 'task' && !answered.current) {
+          answered.current = true;
+          cancelTask();
+        }
       }
     });
     return () => {
@@ -151,22 +164,16 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       if (cancelled) return;
       boardRef.current = snap;
       setLoaded({ key: bKey, snap });
-      // The read resolved, so the delegated directory opened — which is the whole of
-      // what `{ opened: true }` claims. A directory that holds no board is content, not
-      // failure (an `rw` one is seeded above; an `ro` one renders the empty state), so
-      // the ack does not wait for a snapshot.
-      if (store.kind === 'task' && !acked.current) {
-        acked.current = true;
-        completeTask({ opened: true });
-      }
     })().catch((e: unknown) => {
       if (!cancelled) {
         setLoaded({ key: bKey, snap: null });
         cbs.current.onError(e instanceof Error ? e.message : 'Could not open board');
-        // An error is a cancellation, never a false `opened: true`: the caller's
-        // `invokeTask` rejects `cancelled` while the reader sees the toast.
-        if (store.kind === 'task' && !acked.current) {
-          acked.current = true;
+        // The board could not be opened, so the caller's `invokeTask` should reject
+        // `cancelled` rather than wait out the §5.7.1 liveness bound. This is the ONLY
+        // place this app ends its own task — see the note on `answered` above and the
+        // one at the boards effect.
+        if (store.kind === 'task' && !answered.current) {
+          answered.current = true;
           cancelTask();
         }
       }

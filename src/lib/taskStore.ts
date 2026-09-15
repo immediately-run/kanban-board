@@ -29,13 +29,18 @@ export const DIR_PARAM = 'dir';
  *
  * **Deviation from grove's `resolveOpenWiki`, deliberately.** That resolver matches the
  * mount path by `/<paramKey>` suffix and falls back to "the only foreign mount", because
- * it must also serve a repo-load dispatch that has no task input at all. Neither shape is
- * safe here. This app routinely holds OTHER foreign mounts — its private settings store,
- * and a shared space the user granted it — so "the only foreign mount" is not a
- * one-candidate situation, and picking wrong would write a stranger's board into the
- * user's own space. Matching the path the host put in our own params is exact, needs no
- * private path grammar, and fails closed: a `dir` naming a path no mount announces
- * returns `null` rather than the nearest thing to hand.
+ * it must also serve a REPO-LOAD dispatch, which has no task input at all and therefore
+ * nothing to match against. This app has no such mode: every delegation it sees arrives
+ * with the input, and the input already carries the announced path. So the exact match is
+ * both sufficient and strictly better — it needs no private path grammar, and it fails
+ * closed, returning `null` for a `dir` naming a path no mount announces rather than
+ * resolving to the nearest thing to hand.
+ *
+ * (An earlier draft argued the fallback was unsafe because this app "routinely holds
+ * other foreign mounts". That is true of an ordinary boot and NOT of the mode the
+ * deviation applies to: `useStores` gates a callee out of opening its settings store and
+ * its shared space, so under the gate the mount set really is the repo mount plus the
+ * delegation. The conclusion stands on the paragraph above, not on that one.)
  */
 export function storeFromTaskInput(input: TaskInput | null, mounts: readonly SandboxMount[]): Store | null {
   if (!input || input.task !== OPEN_DECLARED_TASK) return null;
