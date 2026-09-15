@@ -68,6 +68,16 @@ select { appearance: none; }
 .switch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 
+/* Task mode (R3-548): where the share button sits on an ordinary boot, a callee shows
+   WHOSE folder it is reading — a label, deliberately not a button, because there is
+   nothing here to press. Same metrics as `.btn-ghost.btn-sm` so the bar keeps its
+   rhythm. */
+.topbar-origin {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line-2); border-radius: var(--r-pill); padding: 8px 12px;
+  color: var(--ink-2); font: 600 13px/1 var(--sans);
+}
+
 /* ---- theme switch ---- */
 .themeswitch {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer;

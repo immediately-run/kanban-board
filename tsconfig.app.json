@@ -21,5 +21,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // The test files import `node:fs` and vitest's globals-free API, so they are
+  // type-checked by tsconfig.test.json (which carries the node types) rather than here.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

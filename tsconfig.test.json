@@ -1,0 +1,30 @@
+{
+  // Tests run under vitest in NODE, not in the browser bundle, so they need the node
+  // types the app project deliberately does not carry — `board.test.ts` drives the
+  // read layer over a real temp directory with `node:fs`. They must still be
+  // type-checked, or `tsc -b` would quietly stop covering them. Their own project keeps
+  // both true without loosening the app's compiler options. (Grove's shape, R3-548.)
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["node", "vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "vitest.config.ts"]
+}

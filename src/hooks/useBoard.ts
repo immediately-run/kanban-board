@@ -1,6 +1,7 @@
 // Boards + the open board's cards for one Store, with optimistic mutations and
 // (for shared spaces) a directory poll that pulls other members' changes in.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { cancelTask, completeTask } from '@immediately-run/sdk/tasks';
 import {
   boardDir,
   boardsDir,
@@ -58,6 +59,10 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
   const loading = !!store && (boardsState?.key !== sKey || (!!bKey && loaded?.key !== bKey));
 
   const boardRef = useRef<BoardSnapshot | null>(board);
+  // R3-548: the one-bit ack an `open-declared` callee owes its caller, sent once per
+  // instance. A ref rather than state because the answer must not re-render anything and
+  // must not be re-sent when the board reloads.
+  const acked = useRef(false);
   const inflight = useRef(0);
   const dirty = useRef(false);
   const cbs = useRef({ onBoardChange, onRemoteUpdate, onError, by });
@@ -146,10 +151,24 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       if (cancelled) return;
       boardRef.current = snap;
       setLoaded({ key: bKey, snap });
+      // The read resolved, so the delegated directory opened — which is the whole of
+      // what `{ opened: true }` claims. A directory that holds no board is content, not
+      // failure (an `rw` one is seeded above; an `ro` one renders the empty state), so
+      // the ack does not wait for a snapshot.
+      if (store.kind === 'task' && !acked.current) {
+        acked.current = true;
+        completeTask({ opened: true });
+      }
     })().catch((e: unknown) => {
       if (!cancelled) {
         setLoaded({ key: bKey, snap: null });
         cbs.current.onError(e instanceof Error ? e.message : 'Could not open board');
+        // An error is a cancellation, never a false `opened: true`: the caller's
+        // `invokeTask` rejects `cancelled` while the reader sees the toast.
+        if (store.kind === 'task' && !acked.current) {
+          acked.current = true;
+          cancelTask();
+        }
       }
     });
     return () => {

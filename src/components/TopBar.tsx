@@ -14,7 +14,9 @@ interface Props {
   onNewBoard: (name: string) => void;
   onRenameBoard: (name: string) => void;
   onDeleteBoard: (id: string) => void;
-  onShare: () => void;
+  /** Absent in task mode (R3-548): a delegated board has no share affordance, because
+   *  the directory belongs to the caller. The read-only marker still shows. */
+  onShare?: () => void;
 }
 
 function TopBar({ boards, boardId, store, readOnly, onSelectBoard, onNewBoard, onRenameBoard, onDeleteBoard, onShare }: Props) {
@@ -155,16 +157,24 @@ function TopBar({ boards, boardId, store, readOnly, onSelectBoard, onNewBoard, o
       </div>
 
       <div className="topbar-right">
-        <button
-          type="button"
-          className={`btn ${shared ? 'btn-shared' : 'btn-ghost'} btn-sm`}
-          onClick={onShare}
-          title={shared ? `Shared: ${store?.name ?? store?.spaceId}` : 'Share this board'}
-        >
-          {shared ? <Icon name="users" size={15} /> : <Icon name="share" size={15} />}
-          <span className="btn-label">{shared ? (store?.name ?? 'Shared') : 'Share'}</span>
-          {readOnly && <Icon name="lock" size={13} />}
-        </button>
+        {onShare ? (
+          <button
+            type="button"
+            className={`btn ${shared ? 'btn-shared' : 'btn-ghost'} btn-sm`}
+            onClick={onShare}
+            title={shared ? `Shared: ${store?.name ?? store?.spaceId}` : 'Share this board'}
+          >
+            {shared ? <Icon name="users" size={15} /> : <Icon name="share" size={15} />}
+            <span className="btn-label">{shared ? (store?.name ?? 'Shared') : 'Share'}</span>
+            {readOnly && <Icon name="lock" size={13} />}
+          </button>
+        ) : (
+          <span className="topbar-origin" title={store?.name ?? 'The folder you opened'}>
+            <Icon name="board" size={15} />
+            <span className="btn-label">{store?.name ?? 'Opened folder'}</span>
+            {readOnly && <Icon name="lock" size={13} />}
+          </span>
+        )}
         <ThemeSwitch />
       </div>
     </header>
