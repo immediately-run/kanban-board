@@ -96,28 +96,24 @@ export function useStores() {
   const privRef = useRef<Store | null>(null);
   const configRef = useRef<AppConfig>({});
 
-  // Read by the boot effect AFTER each await. The effect's own `isCallee` is the value
-  // at the render that started it, and the host delivers `task-input` from an effect once
-  // the bundle is interactive — so a genuine callee can begin the ordinary boot and learn
-  // what it is a moment later. Re-checking a ref is what makes the gate stop the REST of
-  // that boot, rather than only its final `setState`.
-  const calleeRef = useRef(isCallee);
-  useEffect(() => {
-    calleeRef.current = isCallee;
-  }, [isCallee]);
-
   useEffect(() => {
     // The gate, in two halves. This one stops the boot from STARTING when the input is
     // already known — the common case, since the host mints the delegation before the
-    // callee boots. The `abandoned()` re-checks below are the other half, for the boot
-    // that had already begun: they stop the space mount and the `config.json` write, not
-    // merely the final `setState`. What the pair guarantees is that a callee neither
-    // grants itself the user's shared space nor writes their config; the settings mount
-    // itself may already have been opened by an in-flight first `await`, which is why
-    // that is not claimed here.
+    // callee boots.
+    //
+    // The `abandoned()` re-checks below are the other half, and they are what does the
+    // work for a boot that had ALREADY begun when the input landed: they stop the space
+    // mount and the `config.json` write, not merely the final `setState`. They need no
+    // separate "am I a callee now?" signal — `isCallee` is this effect's dependency, so
+    // the flip re-runs it, and React runs the previous cleanup (which sets `cancelled`)
+    // before the new body. One flag, and it is already there.
+    //
+    // What the pair guarantees: a callee neither grants itself the user's shared space
+    // nor writes their config. The settings mount itself may already have been opened by
+    // an in-flight first `await`, which is why that is not claimed.
     if (isCallee) return;
     let cancelled = false;
-    const abandoned = () => cancelled || calleeRef.current;
+    const abandoned = () => cancelled;
     (async () => {
       const priv = await openPrivateStore('data');
       if (abandoned()) return;

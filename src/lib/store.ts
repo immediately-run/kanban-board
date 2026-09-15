@@ -120,6 +120,21 @@ export async function writeText(path: string, text: string): Promise<void> {
   await fs.promises.writeFile(path, text, 'utf8');
 }
 
+/**
+ * Read the store's root, letting the failure ESCAPE.
+ *
+ * Every other read in this file is total on purpose — `readJson` falls back, `listFiles`
+ * and `listBoards` return `[]` — because for the app's OWN stores "not there yet" and
+ * "cannot be read" are the same thing: show the empty state and let the user create
+ * something. A delegated directory is different. A caller asked us to open THEIR folder,
+ * so "empty" and "unreadable" are different answers and only one of them should end the
+ * task. This is the one read that can tell them apart, which is why it is the one read
+ * that throws.
+ */
+export async function assertRootReadable(store: Store): Promise<void> {
+  await fs.promises.readdir(store.root);
+}
+
 export async function listFiles(dir: string, ext?: string): Promise<string[]> {
   try {
     const names = await fs.promises.readdir(dir);

@@ -22,7 +22,7 @@ import {
   type BoardSnapshot,
   type Card,
 } from '../lib/board';
-import { newId, pollDir, type Store } from '../lib/store';
+import { assertRootReadable, newId, pollDir, type Store } from '../lib/store';
 
 const POLL_MS = 2500;
 
@@ -59,9 +59,13 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
   const loading = !!store && (boardsState?.key !== sKey || (!!bKey && loaded?.key !== bKey));
 
   const boardRef = useRef<BoardSnapshot | null>(board);
-  // R3-548: a task boot answers its caller AT MOST ONCE, and only to give up. A ref
-  // rather than state because the answer must not re-render anything and must not be
-  // re-sent when the board reloads.
+  // R3-548: a task boot settles its caller AT MOST ONCE. A ref rather than state because
+  // settling must not re-render anything and must not happen twice.
+  //
+  // It latches on SUCCESS as well as on the give-up, and that is the load-bearing half:
+  // once the delegated directory has been read, the task belongs to the reader, and a
+  // later failure — a board whose file goes missing while they are looking at it — must
+  // toast, not tear their session down.
   const answered = useRef(false);
   const inflight = useRef(0);
   const dirty = useRef(false);
@@ -97,6 +101,25 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
     if (!store || !sKey) return;
     let cancelled = false;
     (async () => {
+      // THE ONE READ ALLOWED TO FAIL, and it is here for a reason worth stating: every
+      // other read in this app is total — `listBoards` catches `readdir` and returns
+      // `[]`, `readBoard` bottoms out in `readJson`, which falls back — so a delegated
+      // directory that cannot be read is otherwise INDISTINGUISHABLE from an empty one.
+      // Without this probe both render "No boards here yet", nothing settles the task,
+      // and the caller waits out the 600s liveness bound to a `timeout`.
+      if (store.kind === 'task' && !answered.current) {
+        try {
+          await assertRootReadable(store);
+          // Readable: the delegation is good and the reader has it. Latch, so nothing
+          // after this point can cancel a session they are using.
+          answered.current = true;
+        } catch {
+          answered.current = true;
+          cbs.current.onError('The folder could not be opened.');
+          cancelTask();
+          return;
+        }
+      }
       let list = await listBoards(store);
       // A `'task'` store never takes this branch: `open-declared` attenuates the dir cap
       // to `ro` UNCONDITIONALLY (site-main `runTaskInvoke.ts` — "the opener reads the
@@ -115,14 +138,6 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       if (!cancelled) {
         setBoardsState({ key: sKey, list: [] });
         cbs.current.onError(e instanceof Error ? e.message : 'Could not list boards');
-        // The delegated directory could not even be listed, so there is nothing for the
-        // reader to look at and no later read to fail: answer the caller now rather than
-        // leaving `invokeTask` to the §5.7.1 liveness bound. A directory that lists as
-        // EMPTY is not this case — that is content, and the reader sees the empty state.
-        if (store.kind === 'task' && !answered.current) {
-          answered.current = true;
-          cancelTask();
-        }
       }
     });
     return () => {
@@ -168,14 +183,9 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       if (!cancelled) {
         setLoaded({ key: bKey, snap: null });
         cbs.current.onError(e instanceof Error ? e.message : 'Could not open board');
-        // The board could not be opened, so the caller's `invokeTask` should reject
-        // `cancelled` rather than wait out the §5.7.1 liveness bound. This is the ONLY
-        // place this app ends its own task — see the note on `answered` above and the
-        // one at the boards effect.
-        if (store.kind === 'task' && !answered.current) {
-          answered.current = true;
-          cancelTask();
-        }
+        // Deliberately NOT a cancel. By the time a board is being opened the delegated
+        // directory has already been read (the probe above latched `answered`), so the
+        // task is the reader's; a board that will not load is a toast, not a teardown.
       }
     });
     return () => {

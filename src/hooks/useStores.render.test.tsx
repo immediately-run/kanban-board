@@ -14,6 +14,9 @@
 
 import { act } from 'react';
 import { useState } from 'react';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxMount } from '@immediately-run/sdk/mounts';
@@ -24,10 +27,12 @@ const DIR = '/task/s1/dir';
 let taskInput: TaskInput | null = null;
 let mounts: SandboxMount[] = [];
 
+const cancelTask = vi.fn();
 vi.mock('@immediately-run/sdk/tasks', () => ({
   useTaskInput: () => taskInput,
-  cancelTask: vi.fn(),
-  completeTask: vi.fn(),
+  // `completeTask` is deliberately absent: nothing in this app imports it any more, and
+  // a mock that offers it would let a regression re-introduce the call unnoticed.
+  cancelTask: (...args: unknown[]) => cancelTask(...args),
 }));
 vi.mock('@immediately-run/sdk/mounts', () => ({
   useMounts: () => mounts,
@@ -38,6 +43,7 @@ vi.mock('@immediately-run/sdk/mounts', () => ({
 }));
 
 const { useStores, storeKey } = await import('./useStores');
+const { useBoard } = await import('./useBoard');
 const { default: React } = await import('react');
 
 /** `App.tsx`'s own shape: a render-phase reset keyed on the store's IDENTITY. */
@@ -190,5 +196,136 @@ describe('a task boot persists nothing (R3-548)', () => {
     expect(captured.api!.config.lastBoard ?? {}).toEqual({});
 
     await act(async () => root.unmount());
+  });
+});
+
+// R3-548 round 2 — the gate's post-await checkpoints, which round 1 added and round 2
+// found untested. Every other case in this file has the task input present from render
+// 1, so `if (isCallee) return` fires immediately and the async boot never runs: the
+// checkpoints are exactly the path those cases cannot reach. Here the input arrives
+// LATE, which is the sequence they exist for (the host sends `task-input` from an effect
+// once the bundle is interactive; `useTaskInput` seeds from state and corrects in its own
+// effect).
+describe('a boot already in flight when the input lands (R3-548)', () => {
+  let host: HTMLDivElement;
+  beforeEach(() => {
+    taskInput = null; // an ordinary boot, as far as the first render can tell
+    mounts = [];
+    host = document.createElement('div');
+    document.body.appendChild(host);
+  });
+  afterEach(() => host.remove());
+
+  it('stops the space mount and the config write, not merely the final setState', async () => {
+    // The boot has to be PARKED on an await when the input lands, or there is no race to
+    // test: a boot that already finished has nothing left to stop, and a version of this
+    // case that re-rendered after completion passed even with the checkpoints deleted.
+    // So `openPrivateStore` hands back a promise this test resolves by hand.
+    const calls: string[] = [];
+    let releasePrivate!: (s: { root: string; mode: 'rw'; kind: 'settings' }) => void;
+    const parked = new Promise<{ root: string; mode: 'rw'; kind: 'settings' }>((res) => {
+      releasePrivate = res;
+    });
+
+    const store = await import('../lib/store');
+    const spies = [
+      vi.spyOn(store, 'openPrivateStore').mockImplementation(() => {
+        calls.push('openPrivateStore');
+        return parked;
+      }),
+      vi.spyOn(store, 'readJson').mockImplementation(async () => {
+        calls.push('readJson');
+        return { spaceId: 'space:abc' } as never;
+      }),
+      vi.spyOn(store, 'openRememberedSpace').mockImplementation(async () => {
+        calls.push('openRememberedSpace');
+        return null;
+      }),
+      vi.spyOn(store, 'writeJson').mockImplementation(async () => {
+        calls.push('writeJson');
+      }),
+    ];
+
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(Probe, { onRender: () => undefined }));
+    });
+    // Parked: the ordinary boot has asked for the private store and is waiting on it.
+    expect(calls).toEqual(['openPrivateStore']);
+
+    // The input lands WHILE it waits. `isCallee` is this effect's dependency, so the flip
+    // re-runs it: React tears the previous run down (setting `cancelled`) before the new
+    // body returns early — and the parked boot resumes into the checkpoints.
+    taskInput = { task: 'open-declared', params: { dir: DIR } };
+    mounts = [{ path: DIR, type: 'chroot', id: DIR, mode: 'ro' }];
+    await act(async () => {
+      root.render(React.createElement(Probe, { onRender: () => undefined }));
+    });
+    await act(async () => {
+      releasePrivate({ root: '/settings/data', mode: 'rw', kind: 'settings' });
+      await parked;
+    });
+
+    // Nothing after the first await ran. Without the checkpoints this reads
+    // ['openPrivateStore', 'readJson', 'openRememberedSpace', 'writeJson'] — the user's
+    // shared space mounted, and their config rewritten, inside a callee.
+    expect(calls).toEqual(['openPrivateStore']);
+    for (const spy of spies) spy.mockRestore();
+    await act(async () => root.unmount());
+  });
+});
+
+// R3-548 round 2 — the give-up path, which round 1 shipped as two `cancelTask()` calls
+// that could never run: `listBoards` and `readBoard` are total (they catch and fall back),
+// so an unreadable delegated directory arrived as an empty one and nothing settled the
+// task. `useBoard` now probes the root with the one read that is allowed to fail.
+describe('a delegated directory that cannot be read settles the task (R3-548)', () => {
+  let host: HTMLDivElement;
+  const store = (root: string) => ({ root, mode: 'ro' as const, kind: 'task' as const });
+
+  const Board = ({ root }: { root: string }) => {
+    useBoard({
+      store: store(root),
+      boardId: null,
+      onBoardChange: () => undefined,
+      by: 'someone',
+      onRemoteUpdate: () => undefined,
+      onError: () => undefined,
+    });
+    return null;
+  };
+
+  beforeEach(() => {
+    taskInput = { task: 'open-declared', params: { dir: DIR } };
+    mounts = [{ path: DIR, type: 'chroot', id: DIR, mode: 'ro' }];
+    cancelTask.mockClear();
+    host = document.createElement('div');
+    document.body.appendChild(host);
+  });
+  afterEach(() => host.remove());
+
+  it('cancels when the root cannot be read', async () => {
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(Board, { root: '/no/such/delegated/dir' }));
+    });
+    expect(cancelTask).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it('does NOT cancel when it can — an EMPTY directory is content, not failure', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kanban-delegated-'));
+    try {
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(React.createElement(Board, { root: dir }));
+      });
+      // Nothing to show, and nothing to settle: the reader sees the empty state and the
+      // host's dismiss ends the slot.
+      expect(cancelTask).not.toHaveBeenCalled();
+      await act(async () => root.unmount());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBoard, listBoards, readBoard } from './board';
-import type { Store } from './store';
+import { assertRootReadable, type Store } from './store';
 
 // R3-548's load-bearing claim about the read layer: a `'task'` store is a Store like any
 // other, so the SAME bytes read the same through it. If `board.ts` ever branched on
@@ -55,5 +55,36 @@ describe('board.ts reads the same snapshot whatever kind of store points at it (
     // app shows its empty state, and the task is still `opened`.
     expect(await readBoard(storeOfKind('task'), 'no-such-board')).toBeNull();
     expect(await listBoards(storeOfKind('task'))).toEqual([]);
+  });
+});
+
+// R3-548 round 2: the read layer is TOTAL, and that is why a delegated directory needs
+// one read that is not. `listBoards` catches `readdir` and returns `[]`; `readBoard`
+// bottoms out in `readJson`, which falls back. So for a task boot, "empty" and
+// "unreadable" arrive identically — and the app would render "No boards here yet",
+// settle nothing, and leave the caller to the 600s liveness bound. These cases pin the
+// asymmetry rather than the implementation: if `assertRootReadable` ever grows a catch,
+// the first one fails.
+describe('a delegated directory that cannot be read is distinguishable from an empty one (R3-548)', () => {
+  const missing = (root: string): Store => ({ root, mode: 'ro', kind: 'task' });
+
+  it('assertRootReadable THROWS on a root that is not there', async () => {
+    await expect(assertRootReadable(missing('/no/such/delegated/dir'))).rejects.toBeDefined();
+  });
+
+  it('…while every other read answers the same as it would for an empty directory', async () => {
+    const gone = missing('/no/such/delegated/dir');
+    // This is the whole finding: identical answers for two different situations.
+    await expect(listBoards(gone)).resolves.toEqual([]);
+    await expect(readBoard(gone, 'any')).resolves.toBeNull();
+  });
+
+  it('…and resolves for a real one, so the probe is not just "always throws"', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kanban-readable-'));
+    try {
+      await expect(assertRootReadable(missing(root))).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
