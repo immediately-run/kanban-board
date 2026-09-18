@@ -19,6 +19,9 @@ import TopBar from './components/TopBar';
 function App() {
   const auth = useAuth();
   const stores = useStores();
+  // R3-548: an `open-declared` callee renders the delegated board and nothing about
+  // sharing — the folder is the caller's, not ours to hand on.
+  const taskMode = stores.mode === 'task';
   // Stage apps get no login from the host (`user` is null), so let people name themselves.
   const by = auth.user?.login || stores.config.displayName || 'someone';
   const { store } = stores;
@@ -88,7 +91,7 @@ function App() {
         onNewBoard={(name) => void kb.createBoard(name)}
         onRenameBoard={(name) => void kb.renameBoard(name)}
         onDeleteBoard={(id) => void kb.deleteBoard(id)}
-        onShare={() => setShareOpen(true)}
+        onShare={taskMode ? undefined : () => setShareOpen(true)}
       />
 
       {stores.error ? (
@@ -135,7 +138,7 @@ function App() {
         />
       )}
 
-      {shareOpen && (
+      {shareOpen && !taskMode && (
         <ShareDialog
           shared={stores.shared}
           busy={shareBusy}

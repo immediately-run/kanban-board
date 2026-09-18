@@ -7,17 +7,25 @@
 // side effect that throws under plain `vite dev` (no host transport).
 import fs from 'fs';
 import { openSettings, createSpace, requestMount, mount as mountById } from '@immediately-run/sdk/mounts';
-import type { SandboxMount } from '@immediately-run/sdk/mounts';
+import type { SandboxMount, SandboxMountBundle } from '@immediately-run/sdk/mounts';
 
 export interface Store {
   /** Absolute root directory all app files live under. */
   root: string;
   mode: 'ro' | 'rw';
-  kind: 'settings' | 'space' | 'dev' | 'memory';
+  /** `task` is a directory another app delegated to us for one `open-declared`
+   *  invocation (R3-548) — it is not ours, it is not remembered, and it goes away
+   *  with the task. Every other kind is a store this app opened for itself. */
+  kind: 'settings' | 'space' | 'dev' | 'memory' | 'task';
   /** For spaces: the id to remember (re-mount with `openRememberedSpace`). */
   spaceId?: string;
   /** Space display name when the host knows it. */
   name?: string;
+  /** Bundle facts, when the delegated mount is a federated `bundle:` view
+   *  (BUNDLE_EMBEDDING §4a.3, SDK `SandboxMount.bundle`). Carried through so the
+   *  read layer can switch on `bundle.layout` — R3-549's projection. Absent on
+   *  every mount that is not a bundle view, which is all of them today. */
+  bundle?: SandboxMountBundle;
 }
 
 // Under local `vite dev` there is no host; @immediately-run/dev-fs bridges `fs` to
@@ -110,6 +118,21 @@ export async function writeText(path: string, text: string): Promise<void> {
   const dir = path.slice(0, path.lastIndexOf('/'));
   if (dir) await ensureDir(dir);
   await fs.promises.writeFile(path, text, 'utf8');
+}
+
+/**
+ * Read the store's root, letting the failure ESCAPE.
+ *
+ * Every other read in this file is total on purpose — `readJson` falls back, `listFiles`
+ * and `listBoards` return `[]` — because for the app's OWN stores "not there yet" and
+ * "cannot be read" are the same thing: show the empty state and let the user create
+ * something. A delegated directory is different. A caller asked us to open THEIR folder,
+ * so "empty" and "unreadable" are different answers and only one of them should end the
+ * task. This is the one read that can tell them apart, which is why it is the one read
+ * that throws.
+ */
+export async function assertRootReadable(store: Store): Promise<void> {
+  await fs.promises.readdir(store.root);
 }
 
 export async function listFiles(dir: string, ext?: string): Promise<string[]> {
