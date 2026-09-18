@@ -14,7 +14,7 @@
 
 import { act } from 'react';
 import { useState } from 'react';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRoot } from 'react-dom/client';
@@ -281,11 +281,11 @@ describe('a boot already in flight when the input lands (R3-548)', () => {
 // task. `useBoard` now probes the root with the one read that is allowed to fail.
 describe('a delegated directory that cannot be read settles the task (R3-548)', () => {
   let host: HTMLDivElement;
-  const store = (root: string) => ({ root, mode: 'ro' as const, kind: 'task' as const });
+  const store = (root: string, mode: 'ro' | 'rw' = 'ro') => ({ root, mode, kind: 'task' as const });
 
-  const Board = ({ root }: { root: string }) => {
+  const Board = ({ root, mode = 'ro' }: { root: string; mode?: 'ro' | 'rw' }) => {
     useBoard({
-      store: store(root),
+      store: store(root, mode),
       boardId: null,
       onBoardChange: () => undefined,
       by: 'someone',
@@ -323,6 +323,35 @@ describe('a delegated directory that cannot be read settles the task (R3-548)', 
       // Nothing to show, and nothing to settle: the reader sees the empty state and the
       // host's dismiss ends the slot.
       expect(cancelTask).not.toHaveBeenCalled();
+      await act(async () => root.unmount());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a rw task store over an empty directory lists [] and writes nothing (round 3)', async () => {
+    // `taskStore.ts` constructs 'task' stores with mode 'rw' when the mount says so — a
+    // shape its own test round-trips — and until round 3 only the host's attenuation
+    // (a constant in another repo) kept that shape out of the seed branch. The gate now
+    // says `kind !== 'task'` in code; with the guard removed this case fails, because a
+    // seeded "My board" appears in the caller's folder.
+    const dir = mkdtempSync(join(tmpdir(), 'kanban-delegated-rw-'));
+    try {
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(React.createElement(Board, { root: dir, mode: 'rw' }));
+      });
+      // The seed happens at the END of the effect's async chain (probe → list → seed →
+      // re-list), so draining one microtask queue is not enough — a bare render-then-
+      // assert passes even unguarded, exactly the vacuous-test trap round 1 recorded.
+      // Macrotask ticks drain the whole chain; five is far past what the chain needs.
+      for (let i = 0; i < 5; i++) {
+        await act(async () => {
+          await new Promise((r) => setImmediate(r));
+        });
+      }
+      expect(cancelTask).not.toHaveBeenCalled();
+      expect(readdirSync(dir)).toEqual([]);
       await act(async () => root.unmount());
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -117,16 +117,24 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
           answered.current = true;
           cbs.current.onError('The folder could not be opened.');
           cancelTask();
+          // Settle the list state before giving up, so the failure renders the empty
+          // state rather than "Opening your boards…" — the outer catch is the only
+          // other thing that could settle it, and only if the cancel send throws.
+          setBoardsState({ key: sKey, list: [] });
           return;
         }
       }
       let list = await listBoards(store);
-      // A `'task'` store never takes this branch: `open-declared` attenuates the dir cap
-      // to `ro` UNCONDITIONALLY (site-main `runTaskInvoke.ts` — "the opener reads the
-      // bytes, never writes them", §4b.3), so a delegated directory with no board in it
-      // renders the empty state rather than being seeded with one. Seeding someone
-      // else's folder would be the wrong answer even if the mount allowed it.
-      if (list.length === 0 && store.mode === 'rw') {
+      // A `'task'` store never takes the seed branch — the gate says so in code, not
+      // only in this prose: `open-declared` attenuates the dir cap to `ro`
+      // UNCONDITIONALLY (site-main `runTaskInvoke.ts` — "the opener reads the bytes,
+      // never writes them", §4b.3), but a `'task'` store with `mode: 'rw'` is a shape
+      // `taskStore.ts` deliberately constructs, so the host's attenuation cannot be
+      // the only thing keeping this repo out of the branch. A delegated directory
+      // with no board in it renders the empty state rather than being seeded with
+      // one; seeding someone else's folder would be the wrong answer even if the
+      // mount allowed it.
+      if (list.length === 0 && store.mode === 'rw' && store.kind !== 'task') {
         await createBoardOnDisk(store, 'My board', cbs.current.by, true);
         list = await listBoards(store);
       }
