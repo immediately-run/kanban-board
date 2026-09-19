@@ -13,14 +13,17 @@
 // imports nothing that writes — the write helpers of store.ts are not in its imports.
 
 import fs from 'fs';
-import { parseBundleLayout, parseFrontmatter, type BundleLayout } from '@immediately-run/mdx-plugins';
+import { parseBundleLayout, parseFrontmatter, pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
 import type { SandboxMount } from '@immediately-run/sdk/mounts';
 import { readText, type Store } from './store';
 import type { BoardMeta, BoardSnapshot, Card } from './board';
 
 /** The overflow column (§4.1): records whose column value is outside `values` — or that
- *  fail to parse (§4.3 rule 4) — surface here, never dropped silently. */
-export const OVERFLOW_COLUMN_ID = 'unmapped';
+ *  fail to parse (§4.3 rule 4) — surface here, never dropped silently. The id is
+ *  per-resolution and collision-proofed against the vocabulary (see `resolveProjection`)
+ *  — column ids are React keys and drag targets, so a value that happens to equal the
+ *  sentinel must not mint two columns with one id. */
+const OVERFLOW_COLUMN_BASE_ID = '__overflow';
 const OVERFLOW_COLUMN_NAME = 'Unmapped';
 
 /** The record sources the `mdx-frontmatter` grammar defines (§4.1): fields from
@@ -255,6 +258,9 @@ export interface ResolvedProjection {
   /** The effective column vocabulary, in display order (§4a.3: the consumer's order,
    *  clamped to the owner's — a value outside the owner's list falls back to it). */
   values: string[];
+  /** The overflow column's id — distinct from every entry in `values` (the name stays
+   *  "Unmapped" whatever the id has to become). */
+  overflowId: string;
 }
 
 /** `select` as a matcher. Basenames only (the glob hygiene already refused separators),
@@ -325,8 +331,14 @@ export function resolveProjection(
   }
   if (values === undefined) values = ownerValues ?? [];
 
+  // Collision-proof the overflow id against the vocabulary: a value equal to the
+  // sentinel would mint two columns with one id (duplicate React keys, ambiguous
+  // drag targets), so the sentinel yields until it is distinct.
+  let overflowId = OVERFLOW_COLUMN_BASE_ID;
+  for (let n = 2; values.includes(overflowId); n++) overflowId = `${OVERFLOW_COLUMN_BASE_ID}-${n}`;
+
   return {
-    resolved: { sourceDir, select: globToRegExp(rs.select ?? '*'), map: projection.map, values },
+    resolved: { sourceDir, select: globToRegExp(rs.select ?? '*'), map: projection.map, values, overflowId },
     diagnostics,
   };
 }
@@ -388,7 +400,31 @@ export async function resolveProjectedStore(taskStore: Store, mounts: readonly S
       m.path !== taskStore.root && m.bundle?.layout?.recordSets?.[recordSet] !== undefined,
   );
   if (views.length === 0) return { kind: 'waiting', diagnostics };
-  const view = views[0];
+  // Correlate the announced views with the marker's own declarations: a view's layout
+  // was pruned to ITS subtree, so re-pruning with a declared covering subtree is a
+  // no-op exactly when the view IS that declaration's resolution. Without this, two
+  // declared `bundle:` mounts over the same target (a wide one and a narrow one) would
+  // be picked by announcement order and the source dir mapped against the wrong view.
+  const recordSetDirs = new Set(views.map((v) => v.bundle.layout.recordSets[recordSet]?.dir));
+  const coverings = projection.mounts.filter((mo) =>
+    [...recordSetDirs].some((dir) => dir !== undefined && (dir === mo.subtree || dir.startsWith(`${mo.subtree === '/' ? '' : mo.subtree}/`))),
+  );
+  const viewFor = (covering: ProjectionMount | undefined): BundleViewMount => {
+    if (covering === undefined) return views[0];
+    return (
+      views.find(
+        (v) =>
+          JSON.stringify(pruneLayoutToView(v.bundle.layout, covering.subtree)) === JSON.stringify(v.bundle.layout),
+      ) ?? views[0]
+    );
+  };
+  const view = viewFor(coverings[0]);
+  if (views.length > 1 && coverings.length > 1) {
+    diagnostics.push({
+      code: 'projection.mount',
+      message: 'several bundle views announce these records — using the first that matches the declared mount',
+    });
+  }
 
   const { resolved, diagnostics: resolveDiags } = resolveProjection(projection, view.bundle.layout, view.path);
   const all = [...diagnostics, ...resolveDiags];
@@ -420,7 +456,7 @@ export function projectedBoardMeta(store: ProjectedStore): BoardMeta {
     name: store.name ?? 'Board',
     columns: [
       ...store.projection.values.map((v) => ({ id: v, name: v })),
-      { id: OVERFLOW_COLUMN_ID, name: OVERFLOW_COLUMN_NAME },
+      { id: store.projection.overflowId, name: OVERFLOW_COLUMN_NAME },
     ],
     created: '',
     updated: '',
@@ -466,7 +502,10 @@ export async function readProjectedBoard(
     // flashing an empty board — the poll retries either way.
     return previous ?? null;
   }
-  const prev = new Map((previous?.cards ?? []).map((c) => [c.id, c]));
+  // Keyed by the record FILE, not the projected id: the mid-poll fallback below looks
+  // up the reader's previous copy of the SAME record, and an id the frontmatter names
+  // need not equal the filename stem.
+  const prev = new Map((previous?.cards ?? []).map((c) => [c.sourcePath, c]));
   const cards: Card[] = [];
   for (const name of names.sort()) {
     if (name.startsWith('.') || !select.test(name)) continue;
@@ -475,7 +514,7 @@ export async function readProjectedBoard(
     if (record === null) {
       // Unreadable mid-poll: keep the reader's copy of the card for this cycle (the
       // native read layer's own precedent) rather than dropping it.
-      const fallback = prev.get(stem);
+      const fallback = prev.get(name);
       if (fallback) {
         cards.push(fallback);
         continue;
@@ -491,11 +530,14 @@ export async function readProjectedBoard(
         id: asString(record !== null ? fieldOf(record, map.id?.from ?? '') : undefined) ?? stem,
         title: record !== null ? (asString(fieldOf(record, map.title?.from ?? '')) ?? stem) : stem,
         description: '',
-        column: OVERFLOW_COLUMN_ID,
+        column: projection.overflowId,
         order: orderOf(record !== null ? fieldOf(record, map.order?.from ?? '') : undefined),
         labels: [],
         due: null,
         by: '',
+        // A kind field the map does not name renders empty (§4.1); `created` is never
+        // projected by the worked marker, so it stays empty rather than borrowing
+        // `updated`.
         created: '',
         updated: asString(record !== null ? fieldOf(record, map.updated?.from ?? '') : undefined) ?? '',
         sourcePath: name,
@@ -512,7 +554,9 @@ export async function readProjectedBoard(
       labels: Array.isArray(labelsRaw) ? labelsRaw.filter((l): l is string => typeof l === 'string') : [],
       due: null,
       by: '',
-      created: asString(fieldOf(record, map.updated?.from ?? '')) ?? '',
+      // A kind field the map does not name renders empty (§4.1): the worked marker
+      // projects no `created`, so it stays empty rather than borrowing `updated`.
+      created: '',
       updated: asString(fieldOf(record, map.updated?.from ?? '')) ?? '',
       sourcePath: name,
     });

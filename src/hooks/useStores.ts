@@ -119,12 +119,36 @@ export function useStores() {
       if (r.kind === 'projected') setProjectedStore(r.store);
       else if (r.kind === 'native') setProjectionNative(true);
       // 'waiting': the view mount has not been announced yet — the effect re-runs when
-      // `mounts` changes; until then the app renders the delegated bundle natively.
-    })();
+      // `mounts` changes, and the grace timer below bounds the wait.
+    })().catch((e: unknown) => {
+      // The derivation is total by design (every read falls back, every parse degrades),
+      // so an escape here means an unanticipated shape — treat it as native, loudly,
+      // rather than as an unhandled rejection that leaves the boot silent.
+      if (cancelled) return;
+      setProjectionNative(true);
+      setBootNotices((n) => [
+        ...n,
+        e instanceof Error ? `The board's records could not be read (${e.message}).` : 'The board\'s records could not be read.',
+      ]);
+    });
     return () => {
       cancelled = true;
     };
   }, [taskStore, mounts, projectedStore, projectionNative]);
+
+  // The same wait class the delegation itself gets: if the view mount never arrives,
+  // stop waiting after MOUNT_GRACE_MS and render the delegated bundle natively — with a
+  // notice, because "No boards here yet" on a marker-only board bundle would be a lie
+  // (the bundle holds no boards of its own; its records come through the missing view).
+  const projectionWaiting = !!taskStore && !projectedStore && !projectionNative;
+  useEffect(() => {
+    if (!projectionWaiting) return;
+    const t = setTimeout(() => {
+      setProjectionNative(true);
+      setBootNotices((n) => [...n, 'The records mount for this board was not delivered — showing the folder instead.']);
+    }, MOUNT_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [projectionWaiting]);
 
   // Written synchronously by the boot effect and by saveConfig (never during
   // render), so back-to-back saves never read a stale config.

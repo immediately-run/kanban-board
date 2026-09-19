@@ -23,7 +23,7 @@
 
 import { act } from 'react';
 import React from 'react';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import fs from 'fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,7 +32,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
 import type { SandboxMount } from '@immediately-run/sdk/mounts';
 import {
-  OVERFLOW_COLUMN_ID,
   parseMarkerLayout,
   parseProjectionMarker,
   readProjectedBoard,
@@ -130,6 +129,7 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
 
     const snap = await readProjectedBoard(store, projection);
     expect(snap).not.toBeNull();
+    const overflowId = projection.overflowId;
     expect(snap!.meta.columns.map((c) => c.id)).toEqual([
       'available',
       'in-progress',
@@ -137,7 +137,7 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
       'deferred',
       'deprioritized',
       'superseded',
-      OVERFLOW_COLUMN_ID,
+      overflowId,
     ]);
     // Column names are the owner's vocabulary rendered as text (§5).
     expect(snap!.meta.columns.map((c) => c.name)).toEqual([
@@ -159,7 +159,7 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     const snap = await readProjectedBoard(store, projection);
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
     expect(cardsIn(snap!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-637']);
-    expect(cardsIn(snap!.cards, OVERFLOW_COLUMN_ID).map((c) => c.id)).toEqual(['R3-434']);
+    expect(cardsIn(snap!.cards, projection.overflowId).map((c) => c.id)).toEqual(['R3-434']);
     // `done` is neither a column nor a drop target (§7.1 honesty note) — the archived
     // fixture record is display-only, never dropped silently.
     expect(snap!.cards).toHaveLength(3);
@@ -202,6 +202,42 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
 
     const snap = await readProjectedBoard(store, projection);
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-9002', 'R3-9001', 'R3-9003']);
+  });
+
+  it('a record that cannot be read is display-only in overflow, its filename the title (§4.3 rule 4)', async () => {
+    const view = makeView('R3-658.mdx');
+    scratch.push(view);
+    // A directory whose name matches the select glob: readdir lists it, the read of its
+    // "content" fails — the class a mid-write or foreign-encoded record falls into.
+    mkdirSync(join(view, 'R3-9600.mdx'));
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const overflow = cardsIn(snap!.cards, projection.overflowId);
+    expect(overflow.map((c) => c.id)).toEqual(['R3-9600']);
+    expect(overflow[0].title).toBe('R3-9600');
+    expect(overflow[0].sourcePath).toBe('R3-9600.mdx');
+    // The readable record is unaffected.
+    expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
+  });
+
+  it('a record that becomes unreadable mid-poll keeps the reader\'s card for that cycle', async () => {
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(
+      join(view, 'R3-9700.mdx'),
+      '---\ntitle: "Was readable"\nid: R3-9700\nstatus: in-progress\norder: 1\nupdated: 2026-09-19\n---\n\nBody.\n',
+    );
+    const { store, projection } = projectedOver(view);
+    const first = await readProjectedBoard(store, projection);
+    expect(cardsIn(first!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-9700']);
+
+    // Replace the record with an unreadable entry of the same name.
+    rmSync(join(view, 'R3-9700.mdx'));
+    mkdirSync(join(view, 'R3-9700.mdx'));
+    const second = await readProjectedBoard(store, projection, first!);
+    expect(second!.cards.find((c) => c.sourcePath === 'R3-9700.mdx')?.title).toBe('Was readable');
+    expect(second!.cards.find((c) => c.sourcePath === 'R3-9700.mdx')?.column).toBe('in-progress');
   });
 });
 
@@ -345,6 +381,23 @@ describe("the consumer's values are clamped to the owner's vocabulary (G-BE-14)"
     expect(projection).toBeNull();
     expect(diagnostics.map((d) => d.code)).toContain('projection.source');
   });
+
+  it('an owner vocabulary containing the overflow sentinel cannot mint two columns with one id', () => {
+    // A hostile/odd owner declares a status value equal to the sentinel: the overflow
+    // column's id yields until it is distinct (column ids are React keys).
+    const marker = structuredClone(boardMarker());
+    marker.projection.map.column.values = ['available', '__overflow'];
+    const layout = prunedLayout();
+    (layout.recordSets['roadmap-items']!.wellKnown!['status'] as { values: string[] }).values = [
+      'available',
+      '__overflow',
+    ];
+    const { projection } = parseProjectionMarker(marker);
+    const { resolved } = resolveProjection(projection!, layout, '/items');
+    expect(resolved!.values).toContain('__overflow');
+    expect(resolved!.overflowId).not.toBe('__overflow');
+    expect(resolved!.values).not.toContain(resolved!.overflowId);
+  });
 });
 
 // ── the boot resolution: which mount becomes the store ──────────────────────────
@@ -398,6 +451,30 @@ describe('resolveProjectedStore (R3-549)', () => {
     const r = await resolveProjectedStore({ root: delegated, mode: 'ro', kind: 'task' }, []);
     expect(r.kind).toBe('native');
     expect(r.diagnostics.map((d) => d.code)).toContain('marker-unparsable');
+  });
+
+  it('with two announced views, the one matching the DECLARED mount wins, not the first announced', async () => {
+    const narrow = makeView('R3-658.mdx');
+    const wide = makeView('R3-658.mdx');
+    const delegated = mkdtempSync(join(tmpdir(), 'kanban-delegated-'));
+    scratch.push(narrow, wide, delegated);
+    cpSync(join(FIXTURES, 'board.immediately.run.json'), join(delegated, 'immediately.run.json'));
+
+    const layout = prunedLayout();
+    // The WIDE view (the FULL, unpruned layout — every record set, every tree entry) is
+    // announced FIRST; the marker declares a /roadmap-subtree mount, so the narrow view
+    // is its resolution and re-pruning the wide layout with /roadmap is NOT a no-op.
+    const wideLayout = parseMarkerLayout(wikiMarker()) as BundleLayout;
+    const mounts: SandboxMount[] = [
+      { path: delegated, type: 'task', mode: 'ro' },
+      { path: wide, type: 'bundle', mode: 'ro', bundle: { kind: 'wiki', layout: wideLayout } },
+      { path: narrow, type: 'bundle', mode: 'ro', bundle: { kind: 'wiki', layout } },
+    ];
+    const r = await resolveProjectedStore({ root: delegated, mode: 'ro', kind: 'task' }, mounts);
+    expect(r.kind).toBe('projected');
+    if (r.kind !== 'projected') return;
+    expect(r.store.root).toBe(narrow);
+    expect(r.store.projection.sourceDir).toBe(narrow);
   });
 });
 
