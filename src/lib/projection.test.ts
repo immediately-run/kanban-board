@@ -492,8 +492,7 @@ describe('resolveProjectedStore (R3-549)', () => {
     expect(r.store.projection.sourceDir).toBe(narrow);
   });
 
-  it('an ANCESTOR-only declaration resolves against the wide view, the exact declaration beating marker order', async () => {
-    const narrow = makeView('R3-658.mdx');
+  it('an ANCESTOR-only declaration resolves against the wide view, the exact declaration beating marker order', async () => {    const narrow = makeView('R3-658.mdx');
     const wide = makeView('R3-658.mdx');
     const delegated = mkdtempSync(join(tmpdir(), 'kanban-delegated-'));
     scratch.push(narrow, wide, delegated);
@@ -558,5 +557,18 @@ describe('the record-set dir maps through the declared (subtree → mount) pair 
     const archive = parseProjectionMarker(marker).projection!;
     const { resolved } = resolveProjection(archive, layout, '/mnt/view');
     expect(resolved!.sourceDir).toBe('/mnt/view/archive');
+  });
+
+  it('a marker whose mounts do not cover the record set degrades: no projection, a diagnostic', () => {
+    // The exact/ancestor/none classes of coveringMountFor: this is NONE — the marker
+    // declares a bundle mount over a subtree the record set does not live under, so
+    // the records are unreachable and the projection degrades to nothing.
+    const marker = structuredClone(boardMarker());
+    (marker.requests.mounts as Array<{ at: string; uri: string; subtree: string }>)[0].subtree = '/specs';
+    const { projection } = parseProjectionMarker(marker);
+    expect(projection).not.toBeNull();
+    const { resolved, diagnostics } = resolveProjection(projection!, prunedLayout(), '/items');
+    expect(resolved).toBeNull();
+    expect(diagnostics.map((d) => d.code)).toContain('projection.mount');
   });
 });

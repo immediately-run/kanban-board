@@ -411,26 +411,25 @@ export async function resolveProjectedStore(taskStore: Store, mounts: readonly S
   if (views.length === 0) return { kind: 'waiting', diagnostics };
   // Correlate the announced views with the marker's own declarations. Re-pruning a
   // view's layout with a declared covering subtree is a no-op when the view's own
-  // subtree is AT LEAST that covering — so consistency filters out narrower views, and
-  // among the consistent ones the LARGEST layout is the covering's own resolution (a
-  // root covering makes every view consistent, and its resolution is the full prune).
-  // Without this, a wide and a narrow view over the same target would be picked by
-  // announcement order and the source dir mapped against the wrong one.
-  const covering = coveringMountFor(views[0].bundle.layout.recordSets[recordSet]?.dir ?? '/', projection.mounts);
+  // subtree is AT MOST that covering (nothing the view carries sits outside the
+  // covering) — so consistency filters out WIDER views and keeps narrower-or-equal
+  // ones; among the consistent, the LARGEST layout is the covering's own resolution
+  // (a root covering makes every view consistent, and its resolution is the full
+  // prune — the widest of them). Without this, a wide and a narrow view over the same
+  // target would be picked by announcement order and the source dir mapped against
+  // the wrong one.
+  const rsDir = views[0].bundle.layout.recordSets[recordSet]?.dir;
+  const covering = rsDir === undefined ? undefined : coveringMountFor(rsDir, projection.mounts);
   const viewFor = (cov: ProjectionMount | undefined): BundleViewMount => {
     if (cov === undefined) return views[0];
     const consistent = views.filter(
       (v) => JSON.stringify(pruneLayoutToView(v.bundle.layout, cov.subtree)) === JSON.stringify(v.bundle.layout),
     );
-    // Among consistent views the covering's own resolution is the LARGEST layout — the
-    // widest prune of the same owner's declaration (a root covering makes every view
-    // consistent, and its resolution is the full prune; a proper subtree's exact view
-    // is the only consistent one in every real shape).
     const size = (v: BundleViewMount) => JSON.stringify(v.bundle.layout).length;
     return (consistent.length > 0 ? consistent : views).reduce((best, v) => (size(v) > size(best) ? v : best));
   };
   const view = viewFor(covering);
-  if (views.length > 1) {
+  if (views.length > 1 && covering !== undefined) {
     diagnostics.push({
       code: 'projection.mount',
       message: 'several bundle views announce these records — using the one matching the declared mount',
