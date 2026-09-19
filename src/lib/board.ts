@@ -7,6 +7,7 @@
 // never clobber each other (last-write-wins only ever applies to ONE card).
 import fs from 'fs';
 import { ensureDir, listFiles, newId, readJson, removeFile, writeJson, type Store } from './store';
+import { isProjectedStore, projectedBoardMeta, readProjectedBoard } from './projection';
 
 export interface Column {
   id: string;
@@ -37,6 +38,9 @@ export interface Card {
   by: string;
   created: string;
   updated: string;
+  /** R3-549: the record file a PROJECTED card came from (the item's path, shown as
+   *  text in the card modal). Absent on every native card. */
+  sourcePath?: string;
 }
 
 export interface BoardSnapshot {
@@ -51,7 +55,11 @@ const join = (...p: string[]) => p.join('/').replace(/\/+/g, '/');
 export const boardsDir = (store: Store) => join(store.root, 'boards');
 export const boardDir = (store: Store, boardId: string) => join(boardsDir(store), boardId);
 export const boardFile = (store: Store, boardId: string) => join(boardDir(store, boardId), 'board.json');
-export const cardsDir = (store: Store, boardId: string) => join(boardDir(store, boardId), 'cards');
+/** A projected store has one board — the marker's bundle — and its "cards directory" IS
+ *  the projected source directory (R3-549): routing the existing poll onto it is the
+ *  whole point of this seam. */
+export const cardsDir = (store: Store, boardId: string) =>
+  isProjectedStore(store) ? store.projection.sourceDir : join(boardDir(store, boardId), 'cards');
 export const cardFile = (store: Store, boardId: string, cardId: string) =>
   join(cardsDir(store, boardId), `${cardId}.json`);
 
@@ -121,6 +129,9 @@ function asMeta(raw: unknown, id: string): BoardMeta | null {
 // ── reads ──────────────────────────────────────────────────────────────────────
 
 export async function listBoards(store: Store): Promise<BoardMeta[]> {
+  // R3-549: a projected store lists exactly one board — the marker's bundle, its
+  // columns computed from the projection map's `values` (§4.1).
+  if (isProjectedStore(store)) return [projectedBoardMeta(store)];
   let ids: string[] = [];
   try {
     ids = (await fs.promises.readdir(boardsDir(store))).filter((n) => !n.startsWith('.'));
@@ -156,6 +167,10 @@ export async function readCards(store: Store, boardId: string, previous: Card[] 
 }
 
 export async function readBoard(store: Store, boardId: string, previous?: BoardSnapshot): Promise<BoardSnapshot | null> {
+  // R3-549: the one branch. A store that carries a bundle layout AND a projection
+  // resolved against it reads the projected records; every other store — including a
+  // delegated bundle this app could not project — takes today's native path unchanged.
+  if (isProjectedStore(store)) return readProjectedBoard(store, store.projection, previous);
   const meta = (await readBoardMeta(store, boardId)) ?? previous?.meta ?? null;
   if (!meta) return null;
   const cards = await readCards(store, boardId, previous?.cards ?? []);

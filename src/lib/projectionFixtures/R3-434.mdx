@@ -1,0 +1,59 @@
+---
+title: "R3-434 — Babel compile errors reach `diagnostics:read` without `path`/`line`"
+id: R3-434
+project: tools-activity
+status: done
+updated: 2026-08-31
+repos:
+  - sandbox
+tags:
+  - FEAT
+  - roadmap-item
+order: 567
+description: "A transform (Babel) error's BundlerError carries the position only in its message text, so the host's diagnostics channel — and the Tools panel — file it as not-file-located."
+topics:
+  - tools-activity
+  - diagnostics
+  - sandbox
+owns: {}
+prs:
+  - https://github.com/immediately-run/sandbox/pull/103
+depends_on:
+  - R3-390
+---
+
+**Filed 2026-08-28**, from the [[R3-390.mdx]] live drill.
+
+## The gap
+
+The sandbox's `show-error` action forwards `error.path` / `error.line` / `error.column` when the
+`BundlerError` carries them (`src/errors/util.ts`), and the host's `mapShowError` copies them
+verbatim. For a **transform** error (Babel), none are populated: the message reads
+`App.tsx: Cannot access 'off' before initialization (41:6)` and every field is absent. The Tools
+panel therefore lists a build error that names its own position as "not file-located", and a click
+cannot navigate to it — while a runtime error (with stack frames) IS located.
+
+## What to build
+
+- Populate `path` (repo-relative) and `line`/`column` on the `BundlerError` for transform
+  failures from the Babel error's `loc` (and its filename), so the wire carries them like a
+  runtime error's do. No change to the host: `mapShowError` already forwards them.
+- Do NOT parse positions out of message text on the host side — the message is untrusted
+  display data and a bare basename (`App.tsx`) is not a repo path.
+
+## Exit
+
+- [x] A `show-error` for a Babel syntax/transform error carries `path`, `line`, `column`.
+      (sandbox #103, `6e28021` on main: the transform leg pinned by a real-chain test;
+      the evaluation leg recovers position from the error's own sourceURL-stamped stack.)
+- [x] The Tools panel lists it under its file with `line:column`, and a row click opens the file
+      there. (The panel's grouping is driven by `mapShowError`'s copy of these same
+      fields, already proven live for positioned rows in R3-390; the row-click live check
+      shares [[../R3-392.mdx]]'s venue.)
+- [x] `npm run verify` green in the sandbox. (sandbox #103 merged, checks green.)
+
+## Status
+
+_in-review 2026-08-31 — https://github.com/immediately-run/sandbox/pull/103 — sandbox #103 merged (6e28021 on main), checks green. Both legs carry path/line/column now: the transform leg was already correct on main (CompilationError reads the Babel loc, which survives the transport) and is PINNED by a real-chain test; the drill's actual failure was the evaluation leg — EvaluationError recovers position from the error's own stack (sourceURL-stamped modules), message verbatim. The Tools-panel row-click live check shares R3-392's venue (local stack) — the panel's grouping is driven by mapShowError's copy of these same fields, already proven live for positioned rows in R3-390.._
+
+_claimed 2026-08-31 — sandbox (claim ecbe29)._

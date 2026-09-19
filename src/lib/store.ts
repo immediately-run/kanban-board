@@ -8,6 +8,7 @@
 import fs from 'fs';
 import { openSettings, createSpace, requestMount, mount as mountById } from '@immediately-run/sdk/mounts';
 import type { SandboxMount, SandboxMountBundle } from '@immediately-run/sdk/mounts';
+import type { ResolvedProjection } from './projection';
 
 export interface Store {
   /** Absolute root directory all app files live under. */
@@ -26,6 +27,11 @@ export interface Store {
    *  read layer can switch on `bundle.layout` — R3-549's projection. Absent on
    *  every mount that is not a bundle view, which is all of them today. */
   bundle?: SandboxMountBundle;
+  /** R3-549: the projection RESOLVED against `bundle.layout` (see lib/projection.ts),
+   *  present only on a store derived by `resolveProjectedStore` — a marker-only board
+   *  bundle whose records live through a declared `bundle:` view. Its presence with
+   *  `bundle.layout` is `board.ts`'s one branch condition. */
+  projection?: ResolvedProjection;
 }
 
 // Under local `vite dev` there is no host; @immediately-run/dev-fs bridges `fs` to

@@ -4,7 +4,7 @@
 // reachable from App.tsx.
 import './index.css';
 import './App.css';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@immediately-run/sdk/auth';
 import { useBoard } from './hooks/useBoard';
 import { storeKey, useStores } from './hooks/useStores';
@@ -67,6 +67,17 @@ function App() {
       stores.clearError();
     }
   }, [stores, push]);
+
+  // R3-549: projection boot diagnostics (an ignored write-back declaration, a column
+  // vocabulary fallback) — each surfaced once, as a toast, never blocking the boot.
+  const noticed = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const n of stores.bootNotices) {
+      if (noticed.current.has(n)) continue;
+      noticed.current.add(n);
+      push(n);
+    }
+  }, [stores.bootNotices, push]);
 
   const runShare = async (op: () => Promise<'ok' | 'cancelled' | 'error'>) => {
     setShareBusy(true);

@@ -6,7 +6,7 @@
 // the caller delegated, and the private/shared pair must not exist beside it: one board
 // id, two stores, and the `lastBoard` map would cross them. So the task branch is a
 // GATE on the same boot, not a second boot path — `App.tsx` has one store to render.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMounts } from '@immediately-run/sdk/mounts';
 import { cancelTask, useTaskInput } from '@immediately-run/sdk/tasks';
 import {
@@ -18,6 +18,7 @@ import {
   writeJson,
   type Store,
 } from '../lib/store';
+import { resolveProjectedStore } from '../lib/projection';
 import { OPEN_DECLARED_TASK, storeFromTaskInput } from '../lib/taskStore';
 
 /** How long a callee waits for its delegated mount before giving up. Long enough for
@@ -66,7 +67,11 @@ export function useStores() {
   // space). No input means this is the ordinary boot.
   const taskInput = useTaskInput();
   const isCallee = taskInput?.task === OPEN_DECLARED_TASK;
-  const resolved = storeFromTaskInput(taskInput, useMounts() ?? []);
+  // Memoized so the empty case keeps one identity: the projection effect below keys on
+  // `mounts`, and a fresh `[]` per render would re-run it every frame.
+  const liveMounts = useMounts();
+  const mounts = useMemo(() => liveMounts ?? [], [liveMounts]);
+  const resolved = storeFromTaskInput(taskInput, mounts);
 
   // THE LATCH, and it is load-bearing twice over.
   //
@@ -91,6 +96,60 @@ export function useStores() {
   // false once something is latched.
   const [taskStore, setTaskStore] = useState<Store | null>(null);
   if (resolved && !taskStore) setTaskStore(resolved);
+
+  // ── R3-549: the projected store for a marker-only board bundle ────────────────
+  //
+  // A delegated bundle whose marker carries a `projection` reads its records through the
+  // bundle's declared `bundle:` view — a SECOND mount the host announces (carrying the
+  // target's pruned layout, G-BE-19). Deriving that store is async (a marker read) and
+  // may need a mounts update (the view can land after the delegation), so it lives in an
+  // effect and LATCHES exactly like `taskStore` above: once a projection has resolved it
+  // is final for the life of this instance, and `App`'s `store !== prevStore` reset sees
+  // one identity change, not one per render.
+  const [projectedStore, setProjectedStore] = useState<Store | null>(null);
+  const [projectionNative, setProjectionNative] = useState(false);
+  const [bootNotices, setBootNotices] = useState<string[]>([]);
+  useEffect(() => {
+    if (!taskStore || projectedStore || projectionNative) return;
+    let cancelled = false;
+    (async () => {
+      const r = await resolveProjectedStore(taskStore, mounts);
+      if (cancelled) return;
+      if (r.diagnostics.length > 0) setBootNotices(r.diagnostics.map((d) => d.message));
+      if (r.kind === 'projected') setProjectedStore(r.store);
+      else if (r.kind === 'native') setProjectionNative(true);
+      // 'waiting': the view mount has not been announced yet — the effect re-runs when
+      // `mounts` changes, and the grace timer below bounds the wait.
+    })().catch((e: unknown) => {
+      // The derivation is total by design (every read falls back, every parse degrades),
+      // so an escape here means an unanticipated shape — treat it as native, loudly,
+      // rather than as an unhandled rejection that leaves the boot silent.
+      if (cancelled) return;
+      setProjectionNative(true);
+      setBootNotices((n) => [
+        ...n,
+        e instanceof Error ? `The board's records could not be read (${e.message}).` : 'The board\'s records could not be read.',
+      ]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskStore, mounts, projectedStore, projectionNative]);
+
+  // The same wait class the delegation itself gets: if the view mount never arrives,
+  // stop waiting after MOUNT_GRACE_MS and render the delegated bundle natively — with a
+  // notice, because "No boards here yet" on a marker-only board bundle would be a lie
+  // (the bundle holds no boards of its own; its records come through the missing view).
+  const projectionWaiting = !!taskStore && !projectedStore && !projectionNative;
+  useEffect(() => {
+    if (!projectionWaiting) return;
+    const t = setTimeout(() => {
+      setProjectionNative(true);
+      setBootNotices((n) => [...n, 'The records mount for this board was not delivered — showing the folder instead.']);
+    }, MOUNT_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [projectionWaiting]);
+
   // Written synchronously by the boot effect and by saveConfig (never during
   // render), so back-to-back saves never read a stale config.
   const privRef = useRef<Store | null>(null);
@@ -249,7 +308,10 @@ export function useStores() {
     privateStore: isCallee ? null : state.privateStore,
     shared: isCallee ? null : state.shared,
     error: isCallee ? (taskFailed ? 'The folder to open was not delivered. Try opening it again.' : null) : state.error,
-    store: taskStore ?? (isCallee ? null : (state.shared ?? state.privateStore)),
+    store: projectedStore ?? taskStore ?? (isCallee ? null : (state.shared ?? state.privateStore)),
+    // R3-549: non-fatal projection diagnostics (an ignored `writable`, a vocabulary
+    // fallback) — surfaced once each by `App` as toasts, never blocking the boot.
+    bootNotices,
     openShared: isCallee ? noShare : openShared,
     createShared: isCallee ? noShare : createShared,
     leaveShared: isCallee ? noShare : leaveShared,
