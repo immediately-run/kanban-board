@@ -1,0 +1,59 @@
+{
+  "opensWith": { "task": "open-wiki", "version": "1.0" },
+  "kind": "wiki",
+  "components": {
+    "RoadmapBoard": "./components/RoadmapBoard.tsx",
+    "RoadmapMeta": "./components/RoadmapMeta.tsx",
+    "NextAvailable": "./components/NextAvailable.tsx",
+    "Dependencies": "./components/Dependencies.tsx",
+    "ProjectIndex": "./components/ProjectIndex.tsx",
+    "ProjectItems": "./components/ProjectItems.tsx",
+    "ProjectMembers": "./components/ProjectMembers.tsx",
+    "ProjectMeta": "./components/ProjectMeta.tsx",
+    "StatusBadge": "./components/StatusBadge.tsx",
+    "TopicIndex": "./components/TopicIndex.tsx"
+  },
+  "layout": {
+    "version": 1,
+    "recordSets": {
+      "roadmap-items": {
+        "dir": "/roadmap",
+        "select": "R3-*.mdx",
+        "record": "mdx-frontmatter",
+        "schema": "/roadmap/item.schema.json",
+        "id": { "from": "filename" },
+        "unique": ["roadmap-archive"],
+        "wellKnown": {
+          "title": "frontmatter.title",
+          "status": {
+            "from": "frontmatter.status",
+            "values": ["available", "in-progress", "in-review", "deferred", "deprioritized", "superseded"],
+            "terminal": { "value": "done", "movesTo": "roadmap-archive" }
+          },
+          "order": { "from": "frontmatter.order", "meaning": "execution" },
+          "body": "content"
+        },
+        "writable": []
+      },
+      "roadmap-archive": {
+        "dir": "/roadmap/archive",
+        "select": "R3-*.mdx",
+        "record": "mdx-frontmatter",
+        "schema": "/roadmap/item.schema.json",
+        "id": { "from": "filename" },
+        "frozen": true
+      }
+    },
+    "tree": {
+      "/roadmap": { "purpose": "the live engineering roadmap, one file per work item" },
+      "/roadmap/archive": { "purpose": "done items, moved here by the owner's tooling" },
+      "/roadmap/board": { "purpose": "the kanban view of /roadmap; landed by R3-549", "bundle": true },
+      "/specs": { "purpose": "one spec per area" },
+      "/context": { "purpose": "the resident context set and the routed documents" },
+      "/status": { "purpose": "per-spec implementation status" },
+      "/plans": { "purpose": "design plans and reviews" },
+      "/_layouts": { "purpose": "copyable _layout.mdx starters — the layout catalogue's bucket A (R3-309), enumerated in viewer.manifest.json `layouts`" },
+      "/projects": { "purpose": "project cluster entities" }
+    }
+  }
+}

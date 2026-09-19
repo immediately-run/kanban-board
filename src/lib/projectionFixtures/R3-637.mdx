@@ -1,0 +1,83 @@
+---
+title: "R3-637 — pin-release publishes self-contained releases: derive the base map from defaults.ts, bake registry zips, repoint channels"
+id: R3-637
+status: in-progress
+updated: 2026-09-16
+repos:
+  - site-main
+  - cli
+  - ui-releases
+tags:
+  - FEAT
+  - roadmap-item
+description: "UI_RELEASES §3.1/§3.4/§4.4 + §5 steps 5a/7a: the registry pins commits the app repos' own Pages evict (R3-624 whole-site replacement), the base lock covers 8 of ~25 regions, and a moving testing pointer needs channels. Derive the base map from BUILD_DEFAULTS (tsx export), bake zips/<ns>/<repo>/<sha>.zip via the cache-zip core at a materialized checkout, add --channel repoint + --check coverage. Requires: npm-publish."
+topics:
+  - ui-releases
+  - pin-release
+  - zip-cache
+owns: {}
+prs:
+  - https://github.com/immediately-run/immediately-run-site-main/pull/547
+  - https://github.com/immediately-run/immediately-run-cli/pull/39
+  - https://github.com/immediately-run/ui-releases/pull/1
+depends_on: []
+---
+
+**Brief:** the operator's stable/testing collections ask (2026-09-15) — the publish half.
+**Spec:** [[../specs/UI_RELEASES_SPEC.mdx#sec-3-1]] (derive mode + anti-drift), [[../specs/UI_RELEASES_SPEC.mdx#sec-3-4]] (registry zips), [[../specs/UI_RELEASES_SPEC.mdx#sec-4-4]] (channels), §5 steps 5a/7a + the derive paragraph. ZIP_CACHE_AUTOMATION [[../specs/ZIP_CACHE_AUTOMATION_SPEC.mdx#sec-5-3]] (the eviction bound this answers). Standards: [[../context/implementation_standards.mdx]]; [[../context/ways_of_working.mdx#sec-4]]–§5.
+**Depends on:** none — publish-side only. The host enforcement is [[archive/R3-636.mdx]]; the host channel half is [[archive/R3-638.mdx]].
+
+### Requires
+
+- `npm-publish` — the `ui-releases` workflow pins an exact `@immediately-run/cli@<x.y.z>`, and that version must exist on npm before the workflow can run. An agent without publish rights lands all three PRs with tests green and leaves the last two exit criteria unticked, handing the publish + first workflow run to [[R3-639.mdx]]'s operator.
+
+## Why
+
+The registry pins commits the app repos' own Pages evict: R3-624 publishes `<sha>.zip` beside the branch zip, but each Pages deploy REPLACES the site (ZIP_CACHE_AUTOMATION §5.3), so a stable pin older than head 404s to the REST loader on every cold boot. The standing `base` lock covers 8 of ~25 `BUILD_DEFAULTS` regions (stale since 2026-06). And "testing" needs a moving pointer that immutable-by-name ([[../specs/UI_RELEASES_SPEC.mdx#sec-3-3]]) forbids being a release.
+
+## What to build
+
+1. site-main: `scripts/export-release-base.ts` + `npm run export:release-base` — emits the authoring base map (every `BUILD_DEFAULTS` region → its build-default repo at `@main`) as JSON for commit into the registry repo.
+2. cli: `pin-release` bakes `zips/<ns>/<repo>/<sha>.zip` for every lock entry — materialize the commit, build via the cache-zip core, refuse differing bytes at an existing path.
+3. cli: `--channel <name>=<release>` repoints `index.json.channels`; a name that is both a release and a channel is an error.
+4. cli: `--check` gains the coverage assertion — the base lock must cover every region the committed derived map names.
+5. ui-releases: `testing.json` authoring (extends base, `@main`) + the scheduled `testing` workflow.
+
+## Architecture — the decisions, named
+
+- **The export runs with `tsx`, not strip-types.** `node --experimental-strip-types` cannot import `defaults.ts` — its VALUE import `'./capabilities'` is extensionless and fails `ERR_MODULE_NOT_FOUND` (verified 2026-09-15); the `.mts` generators work only because their import graphs are value-clean. Add `tsx` as a devDep and run `tsx scripts/export-release-base.ts`; the script imports `BUILD_DEFAULTS` directly and writes `{"<region>": "provider:ns/repo@main"}` per region. Reason: the CLI keeps no cross-package dependency (its own header rule, `src/release.ts:3-5`), and a hand-kept region copy is exactly the drift this exists to remove.
+- **The bake reuses the cache-zip CORE, extracted.** Extract `buildCacheZip({ repoPath, ref, out })` from `src/commands/cacheZip.ts` (the `git archive` + sidecar + artifacts core around `:474-482`) so `src/commands/pinRelease.ts` is the second caller. The engine archives `HEAD` only — so `pin-release` materializes each pin first: `git clone --filter=blob:none --no-checkout` + fetch the sha + `git checkout <sha>` into `os.tmpdir()`, and the builder runs with HEAD === the pin and `ref: <sha>` (the sidecar coordinate a §6.4 host matches). Never bake a working tree.
+- **Channels are one optional index field.** `ReleaseIndex.channels?: Record<string, string>` in `src/release.ts` (`:96`); `buildIndex` carries it through; `--channel` is the ONLY mutable write the flow performs (§5 7a). A channel whose target is not a published release → error naming both.
+- **Coverage is a loud publish-time gate.** `--check` reads the committed `defaults-map.json` (the export's output, committed to the registry repo) with `JSON.parse` and fails listing every region the base lock omits — the §3.1 anti-drift rule. A script never parses TypeScript source.
+- **The testing workflow writes the Pages-serving branch, never `main`.** `main` is the reviewed authoring surface (R-TA-1's ruleset); the workflow (scheduled + `workflow_dispatch`) runs steps 3–5 + 5a + 7a over `testing.json` and pushes locks/zips/index to the branch GitHub Pages serves. Read the repo's existing `publish.yml` + README first and match its Pages source; if the source/settings need a flip, that leg belongs to [[R3-639.mdx]] (`github-admin`) — land the workflow file and say so in the PR.
+- **Failure is loud and aborting.** A pin that cannot be materialized aborts the publish naming repo+sha; differing bytes at an existing `zips/` path abort naming the path (immutable, §3.4); a missing derived map in `--check` fails naming the file.
+- **Do not:** mutate an existing lock name or zip path; bake from a working tree; invent a second index field for zip locations (paths are derived, §8); let the workflow commit `main`; parse `defaults.ts` with a regex or a hand-copied region list.
+
+## Tests
+
+- cli `test/release.test.mjs` (extend; `node --test`, never jest): `channels` round-trips through `buildIndex`; `--channel` repoint updates only that field; a dual name (release AND channel) errors.
+- cli `test/cacheZipBase.test.mjs` (extend the local-git-fixture pattern): bake at a pinned sha — the zip's sidecar carries `ref === <sha>` and `commitSha === <sha>`; a second bake with changed bytes at the same path aborts.
+- cli coverage: a fixture `defaults-map.json` naming a region the fixture base lock omits → `--check` fails listing it (fixture shaped from the real generator output).
+- site-main: a small jest case runs the export over the REAL `BUILD_DEFAULTS` and asserts the emitted region count equals `BUILD_DEFAULTS.length`.
+
+## Exit criteria
+
+- [ ] site-main: the export jest case green (emitted map covers every `BUILD_DEFAULTS` region).
+- [ ] cli: `npm test` green (build + sidecar + `node --test`, including the new cases).
+- [ ] ui-releases PR merged: `testing.json`, the regenerated `base.json` from the export, the committed `defaults-map.json`, `testing.yml`.
+- [ ] **live, consumes npm-publish** — `npm view @immediately-run/cli` shows the bumped version.
+- [ ] **live, consumes npm-publish** — one `testing` workflow run produced a dated lock + `zips/…` and `channels.testing` in the served `index.json` (or the run is red only on the Pages-settings leg, handed to [[R3-639.mdx]]).
+
+## Hand-off
+
+[[archive/R3-638.mdx]] consumes channels host-side; [[R3-639.mdx]] flips whatever settings this workflow needs and publishes the first `stable`. `docs/content/status/UI_RELEASES_STATUS.mdx` records the landing.
+
+## Status
+
+_in-progress 2026-09-16 — Code legs DELIVERED and on main: site-main #547 (merge da81720 — export:release-base, 23-region derivation, drift-tripwire-shape tests) and cli #39 (merge 0824e9f — channels/dated/--only/@dated, validated-reuse + atomic bake zips, --check coverage + resident-zip validation; 0.9.0). Review gate: 3 rounds per PR, 8 blocking total (all fixed; the round-3 cli catch: the --version probe made the gated legs skip-green on CI — closed with the CI log as evidence), log in plans/review-gate/pr-findings.mdx. REMAINING (operator legs, per the item's Requires — an agent without npm-publish): (1) npm publish @immediately-run/cli@0.9.0; (2) approve+merge ui-releases #1 (open, mergeable, gate complete — the ruleset wants an approval the gate reviewers cannot give; publish BEFORE merge so its workflows resolve); (3) the first testing workflow run (needs the ruleset-bypass settings — R3-639). Item stays in-progress per the going-backwards rule: merged is not delivered until the live legs tick.._
+
+_in-review 2026-09-16 — https://github.com/immediately-run/immediately-run-site-main/pull/547 https://github.com/immediately-run/immediately-run-cli/pull/39 https://github.com/immediately-run/ui-releases/pull/1 — site-main #547 (export:release-base, tsx devDep, 23-region derivation + drift-tripwire tests); cli #39 (channels/dated/--only/@dated, releaseBake zips, --check coverage; 0.8.2→0.9.0); ui-releases #1 (derived base.json + defaults-map.json, regenerated base.lock (23 regions, deliberate --republish of the stale June fixture), testing.json template, testing.yml hourly workflow, publish.yml CLI pin 0.3.0→0.9.0, README). Local pin-release --check green over the exact registry tree. Remaining (operator): npm publish of cli 0.9.0 + the first workflow run + the ruleset-bypass settings — R3-639's legs per the item's Requires.._
+
+_claimed 2026-09-16 — site-main,cli,ui-releases (claim 7c2c7a)._
+
+_(filed 2026-09-15)_

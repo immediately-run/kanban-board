@@ -88,3 +88,35 @@ describe('a delegated directory that cannot be read is distinguishable from an e
     }
   });
 });
+
+// R3-549: the projection branch is ONE branch, and it is total — a store that carries
+// bundle facts (any federated view) but no resolved projection takes today's native
+// path byte for byte. The app holds such stores whenever a delegated bundle's marker
+// has no `projection` (or one this consumer cannot resolve).
+describe('a bundle-fact store without a projection reads natively (R3-549)', () => {
+  it('readBoard and listBoards answer exactly as a plain store over the same bytes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kanban-board-'));
+    try {
+      const plain: Store = { root, mode: 'rw', kind: 'settings' };
+      const meta = await createBoard(plain, 'Native board', 'alice', true);
+
+      const withLayout: Store = {
+        root,
+        mode: 'rw',
+        kind: 'space',
+        // A layout the host could have handed over — but no `projection` on the store.
+        bundle: {
+          kind: 'wiki',
+          layout: {
+            version: 1,
+            recordSets: { 'roadmap-items': { dir: '/roadmap', select: 'R3-*.mdx', record: 'mdx-frontmatter' } },
+          },
+        },
+      };
+      expect(await readBoard(withLayout, meta.id)).toEqual(await readBoard(plain, meta.id));
+      expect(await listBoards(withLayout)).toEqual(await listBoards(plain));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

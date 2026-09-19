@@ -1,0 +1,30 @@
+---
+title: "R3-658 — The bleeding-edge channel: an unpinned release lock, refused in production"
+id: R3-658
+status: available
+updated: 2026-09-17
+repos:
+  - immediately-run-site-main
+  - ui-releases
+  - immediately-run-cli
+  - docs
+tags:
+  - FEAT
+  - roadmap-item
+order: 730
+description: "Two channels replace three: stable stays pinned and digest-verified for production, and testing becomes the absolute bleeding edge — every app at the head of its main branch, unpinned. Requires ReleaseLockEntry.commit to become optional in the kernel, guarded by refusing any lock carrying an unpinned entry for a PRODUCTION deployment (high security event, built-in fallback), while dev/preview applies it with a warning. The zip path already works: zipIntegrity matches on ref, so an unpinned entry resolves to each app repo's own main.zip. Drops testing.yml's hourly cron; pin-release --dated still mints a reproducible snapshot on demand. Requires: npm-publish."
+topics:
+  - ui-releases
+  - channels
+  - registry
+  - release-lock
+owns: {}
+prs: []
+depends_on: []
+---
+
+_(id allocated push-first per PARALLEL_AGENT_DOCS_SPEC R-PAD-7 — `scripts/claim.sh new`; body follows.)_
+
+## Status
+
+_(filed 2026-09-17)_

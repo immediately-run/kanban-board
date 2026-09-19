@@ -1,0 +1,23 @@
+{
+  "opensWith": { "app": "github:immediately-run/kanban-board", "version": "1.0" },
+  "kind": "board",
+  "requests": {
+    "mounts": [
+      { "at": "/items/", "uri": "bundle:../..", "subtree": "/roadmap", "mode": "ro", "required": true }
+    ]
+  },
+  "projection": {
+    "source": { "recordSet": "roadmap-items" },
+    "map": {
+      "id":      { "from": "frontmatter.id" },
+      "title":   { "from": "frontmatter.title" },
+      "column":  { "from": "frontmatter.status",
+                   "values": ["available", "in-progress", "in-review", "deferred", "deprioritized", "superseded"] },
+      "order":   { "from": "frontmatter.order" },
+      "labels":  { "from": "frontmatter.tags" },
+      "body":    { "from": "content" },
+      "updated": { "from": "frontmatter.updated" }
+    },
+    "writable": []
+  }
+}

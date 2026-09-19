@@ -23,8 +23,12 @@ import {
   type Card,
 } from '../lib/board';
 import { assertRootReadable, newId, pollDir, type Store } from '../lib/store';
+import { isProjectedStore } from '../lib/projection';
 
 const POLL_MS = 2500;
+/** R3-549 (BUNDLE_EMBEDDING §7.1): the projected poll's stated cost — one stat per
+ *  record per ~3s tick over the delegated view. */
+const PROJECTED_POLL_MS = 3000;
 
 /** Canonical serialisation so "did the poll bring anything new?" is a string compare. */
 function canon(snap: BoardSnapshot | null): string {
@@ -203,7 +207,7 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
 
   // ── polling (shared spaces only: there are no remote watch events) ───────────
   useEffect(() => {
-    if (!store || !boardId || !store.spaceId) return;
+    if (!store || !boardId) return;
     const onChange = () => {
       if (inflight.current > 0) {
         dirty.current = true;
@@ -211,6 +215,14 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       }
       void reload(true);
     };
+    // R3-549: a projected store polls its SOURCE directory — `cardsDir` routes there —
+    // through the same primitive and the same effect, at §7.1's stated cadence. The
+    // native board/boardlist polls do not apply: the marker-only bundle holds neither.
+    if (isProjectedStore(store)) {
+      const stops = [pollDir(cardsDir(store, boardId), onChange, PROJECTED_POLL_MS)];
+      return () => stops.forEach((s) => s());
+    }
+    if (!store.spaceId) return;
     const stops = [
       pollDir(cardsDir(store, boardId), onChange, POLL_MS),
       pollDir(boardDir(store, boardId), onChange, POLL_MS),
