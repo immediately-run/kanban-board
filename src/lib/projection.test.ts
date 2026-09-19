@@ -239,6 +239,21 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(second!.cards.find((c) => c.sourcePath === 'R3-9700.mdx')?.title).toBe('Was readable');
     expect(second!.cards.find((c) => c.sourcePath === 'R3-9700.mdx')?.column).toBe('in-progress');
   });
+
+  it('an unreadable SOURCE DIRECTORY keeps the reader\'s board (null on a first read)', async () => {
+    const view = makeView('R3-658.mdx');
+    scratch.push(view);
+    const { store, projection } = projectedOver(view);
+    const first = await readProjectedBoard(store, projection);
+    expect(first!.cards).toHaveLength(1);
+
+    // The source dir gone (a torn-down view): the poll retries, the reader keeps
+    // their board — never a flash of the empty state.
+    rmSync(view, { recursive: true, force: true });
+    expect(await readProjectedBoard(store, projection, first!)).toBe(first);
+    const fresh: ProjectedStore = { ...store, projection: { ...projection, sourceDir: '/no/such/view' } };
+    expect(await readProjectedBoard(fresh, fresh.projection)).toBeNull();
+  });
 });
 
 // ── injection: values are held as text, bodies render inert (G-BE-3's DOM half) ──
@@ -475,6 +490,55 @@ describe('resolveProjectedStore (R3-549)', () => {
     if (r.kind !== 'projected') return;
     expect(r.store.root).toBe(narrow);
     expect(r.store.projection.sourceDir).toBe(narrow);
+  });
+
+  it('an ANCESTOR-only declaration resolves against the wide view, the exact declaration beating marker order', async () => {
+    const narrow = makeView('R3-658.mdx');
+    const wide = makeView('R3-658.mdx');
+    const delegated = mkdtempSync(join(tmpdir(), 'kanban-delegated-'));
+    scratch.push(narrow, wide, delegated);
+
+    // (a) The marker declares ONLY a whole-bundle mount (subtree /): its resolution is
+    // the wide view, and the records sit one segment under it — the narrow view is
+    // consistent with '/' too (nothing sits outside it), so the LARGEST layout wins.
+    const ancestorMarker = structuredClone(boardMarker());
+    ancestorMarker.requests.mounts = [{ at: '/all/', uri: 'bundle:../..', subtree: '/', mode: 'ro', required: true }];
+    writeFileSync(join(delegated, 'immediately.run.json'), JSON.stringify(ancestorMarker));
+    const wideLayout = parseMarkerLayout(wikiMarker()) as BundleLayout;
+    const layout = prunedLayout();
+    const r = await resolveProjectedStore(
+      { root: delegated, mode: 'ro', kind: 'task' },
+      [
+        { path: delegated, type: 'task', mode: 'ro' },
+        { path: narrow, type: 'bundle', mode: 'ro', bundle: { kind: 'wiki', layout } },
+        { path: wide, type: 'bundle', mode: 'ro', bundle: { kind: 'wiki', layout: wideLayout } },
+      ],
+    );
+    expect(r.kind).toBe('projected');
+    if (r.kind !== 'projected') return;
+    expect(r.store.root).toBe(wide);
+    expect(r.store.projection.sourceDir).toBe(`${wide}/roadmap`);
+
+    // (b) Both declarations present, the ANCESTOR first: the exact one (subtree
+    // /roadmap) must win over marker order, pairing the narrow view at its root.
+    const bothMarker = structuredClone(boardMarker());
+    bothMarker.requests.mounts = [
+      { at: '/all/', uri: 'bundle:../..', subtree: '/', mode: 'ro', required: true },
+      { at: '/items/', uri: 'bundle:../..', subtree: '/roadmap', mode: 'ro', required: true },
+    ];
+    writeFileSync(join(delegated, 'immediately.run.json'), JSON.stringify(bothMarker));
+    const r2 = await resolveProjectedStore(
+      { root: delegated, mode: 'ro', kind: 'task' },
+      [
+        { path: delegated, type: 'task', mode: 'ro' },
+        { path: narrow, type: 'bundle', mode: 'ro', bundle: { kind: 'wiki', layout } },
+        { path: wide, type: 'bundle', mode: 'ro', bundle: { kind: 'wiki', layout: wideLayout } },
+      ],
+    );
+    expect(r2.kind).toBe('projected');
+    if (r2.kind !== 'projected') return;
+    expect(r2.store.root).toBe(narrow);
+    expect(r2.store.projection.sourceDir).toBe(narrow);
   });
 });
 

@@ -268,6 +268,17 @@ export interface ResolvedProjection {
 const globToRegExp = (glob: string): RegExp => new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
 
 /**
+ * The declared mount that covers a record-set dir, **exact subtree first**: a
+ * dir-equal declaration is the view the record set was pruned to; an ancestor
+ * declaration is a wider view that merely contains it, and would compute the source
+ * dir one segment too deep. Marker order breaks the tie between equal-preference
+ * declarations.
+ */
+const coveringMountFor = (dir: string, mounts: ProjectionMount[]): ProjectionMount | undefined =>
+  mounts.find((mo) => dir === mo.subtree) ??
+  mounts.find((mo) => dir.startsWith(`${mo.subtree === '/' ? '' : mo.subtree}/`));
+
+/**
  * Resolve a parsed {@link Projection} against the layout a mount descriptor carries
  * (`SandboxMount.bundle.layout`, already pruned to the view) and the mount's announced
  * path. Pure: no fs, no host — the whole mapping is testable without a store.
@@ -300,9 +311,7 @@ export function resolveProjection(
     diagnostics.push({ code: 'projection.record', message: `record set "${rsName}" is not mdx-frontmatter` });
     return { resolved: null, diagnostics };
   }
-  const covering = projection.mounts.find(
-    (mo) => rs.dir === mo.subtree || rs.dir.startsWith(`${mo.subtree === '/' ? '' : mo.subtree}/`),
-  );
+  const covering = coveringMountFor(rs.dir, projection.mounts);
   if (covering === undefined) {
     diagnostics.push({
       code: 'projection.mount',
@@ -400,29 +409,31 @@ export async function resolveProjectedStore(taskStore: Store, mounts: readonly S
       m.path !== taskStore.root && m.bundle?.layout?.recordSets?.[recordSet] !== undefined,
   );
   if (views.length === 0) return { kind: 'waiting', diagnostics };
-  // Correlate the announced views with the marker's own declarations: a view's layout
-  // was pruned to ITS subtree, so re-pruning with a declared covering subtree is a
-  // no-op exactly when the view IS that declaration's resolution. Without this, two
-  // declared `bundle:` mounts over the same target (a wide one and a narrow one) would
-  // be picked by announcement order and the source dir mapped against the wrong view.
-  const recordSetDirs = new Set(views.map((v) => v.bundle.layout.recordSets[recordSet]?.dir));
-  const coverings = projection.mounts.filter((mo) =>
-    [...recordSetDirs].some((dir) => dir !== undefined && (dir === mo.subtree || dir.startsWith(`${mo.subtree === '/' ? '' : mo.subtree}/`))),
-  );
-  const viewFor = (covering: ProjectionMount | undefined): BundleViewMount => {
-    if (covering === undefined) return views[0];
-    return (
-      views.find(
-        (v) =>
-          JSON.stringify(pruneLayoutToView(v.bundle.layout, covering.subtree)) === JSON.stringify(v.bundle.layout),
-      ) ?? views[0]
+  // Correlate the announced views with the marker's own declarations. Re-pruning a
+  // view's layout with a declared covering subtree is a no-op when the view's own
+  // subtree is AT LEAST that covering — so consistency filters out narrower views, and
+  // among the consistent ones the LARGEST layout is the covering's own resolution (a
+  // root covering makes every view consistent, and its resolution is the full prune).
+  // Without this, a wide and a narrow view over the same target would be picked by
+  // announcement order and the source dir mapped against the wrong one.
+  const covering = coveringMountFor(views[0].bundle.layout.recordSets[recordSet]?.dir ?? '/', projection.mounts);
+  const viewFor = (cov: ProjectionMount | undefined): BundleViewMount => {
+    if (cov === undefined) return views[0];
+    const consistent = views.filter(
+      (v) => JSON.stringify(pruneLayoutToView(v.bundle.layout, cov.subtree)) === JSON.stringify(v.bundle.layout),
     );
+    // Among consistent views the covering's own resolution is the LARGEST layout — the
+    // widest prune of the same owner's declaration (a root covering makes every view
+    // consistent, and its resolution is the full prune; a proper subtree's exact view
+    // is the only consistent one in every real shape).
+    const size = (v: BundleViewMount) => JSON.stringify(v.bundle.layout).length;
+    return (consistent.length > 0 ? consistent : views).reduce((best, v) => (size(v) > size(best) ? v : best));
   };
-  const view = viewFor(coverings[0]);
-  if (views.length > 1 && coverings.length > 1) {
+  const view = viewFor(covering);
+  if (views.length > 1) {
     diagnostics.push({
       code: 'projection.mount',
-      message: 'several bundle views announce these records — using the first that matches the declared mount',
+      message: 'several bundle views announce these records — using the one matching the declared mount',
     });
   }
 
