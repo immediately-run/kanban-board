@@ -39,7 +39,7 @@ local `vite dev` — the most common silent failure.
    iframe. `document`, `window`, and `fetch` are available. **Web storage is
    not**: `localStorage`, `sessionStorage`, `indexedDB` and the Cache API are
    all unavailable — apps run at an opaque origin (a sandboxed iframe without
-   `allow-same-origin`; `BROWSER_CAPABILITIES_SPEC` §2 in the docs repo), where
+   `allow-same-origin`; `BROWSER_CAPABILITIES_SPEC` §1 in the docs repo), where
    even *reading* `localStorage` throws `SecurityError`, so a
    `typeof localStorage === 'undefined'` guard does NOT work (the throw is on
    access, not on the value). State goes to the mounts instead:
@@ -52,6 +52,7 @@ local `vite dev` — the most common silent failure.
      when signed out, so the app degrades to in-memory state rather than
      crashing (platform security model rule 9). Treat persistence as optional
      and keep the app fully usable without it.
+
    Worked example: `src/hooks/useTheme.ts` — the in-memory fallback for
    signed-out use; moving its persistence onto `openLocalStore()` is per-app
    work.
