@@ -18,7 +18,7 @@ import {
   writeJson,
   type Store,
 } from '../lib/store';
-import { resolveProjectedStore } from '../lib/projection';
+import { resolveProjectedStore, resolveViewStore } from '../lib/projection';
 import { OPEN_DECLARED_TASK, storeFromTaskInput } from '../lib/taskStore';
 
 /** How long a callee waits for its delegated mount before giving up. Long enough for
@@ -113,7 +113,10 @@ export function useStores() {
     if (!taskStore || projectedStore || projectionNative) return;
     let cancelled = false;
     (async () => {
-      const r = await resolveProjectedStore(taskStore, mounts);
+      // R3-789: a declared VIEW brings its projection in the task input (no marker at the
+      // folder); a bundle opened as itself reads its own marker as before.
+      const viewInput = taskInput?.params.view;
+      const r = viewInput !== undefined ? resolveViewStore(taskStore, viewInput) : await resolveProjectedStore(taskStore, mounts);
       if (cancelled) return;
       if (r.diagnostics.length > 0) setBootNotices(r.diagnostics.map((d) => d.message));
       if (r.kind === 'projected') setProjectedStore(r.store);
@@ -134,7 +137,7 @@ export function useStores() {
     return () => {
       cancelled = true;
     };
-  }, [taskStore, mounts, projectedStore, projectionNative]);
+  }, [taskStore, mounts, projectedStore, projectionNative, taskInput]);
 
   // The same wait class the delegation itself gets: if the view mount never arrives,
   // stop waiting after MOUNT_GRACE_MS and render the delegated bundle natively — with a

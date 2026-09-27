@@ -37,6 +37,7 @@ import {
   readProjectedBoard,
   resolveProjection,
   resolveProjectedStore,
+  resolveViewStore,
   type ProjectedStore,
 } from './projection';
 import { cardsIn, type Card, type Column } from './board';
@@ -570,5 +571,67 @@ describe('the record-set dir maps through the declared (subtree → mount) pair 
     const { resolved, diagnostics } = resolveProjection(projection!, prunedLayout(), '/items');
     expect(resolved).toBeNull();
     expect(diagnostics.map((d) => d.code)).toContain('projection.mount');
+  });
+});
+
+describe('resolveViewStore — a declared view (R3-789, §4b.1a)', () => {
+  // The host delegated the view's subtree AS the folder and handed the view's declaration
+  // over as task input; there is no marker at the folder, so nothing is read from it.
+  const viewInput = () => ({ name: 'Roadmap board', subtree: '/roadmap', projection: boardMarker().projection });
+  const viewStore = (root: string) => ({
+    root,
+    mode: 'ro' as const,
+    kind: 'task' as const,
+    bundle: { kind: 'wiki', layout: prunedLayout() },
+  });
+
+  it('projects the delegated folder itself, read-only, and reads the records in it', async () => {
+    const view = makeView('R3-658.mdx', 'R3-637.mdx', 'R3-434.mdx');
+    scratch.push(view);
+    const r = resolveViewStore(viewStore(view), viewInput());
+    expect(r.kind).toBe('projected');
+    if (r.kind !== 'projected') return;
+    expect(r.diagnostics).toEqual([]);
+    expect(r.store.root).toBe(view);
+    expect(r.store.mode).toBe('ro');
+    expect(r.store.projection.sourceDir).toBe(view);
+    const snap = await readProjectedBoard(r.store, r.store.projection);
+    expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
+    expect(cardsIn(snap!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-637']);
+  });
+
+  it('stays native with a diagnostic when the view carries no projection', () => {
+    const r = resolveViewStore(viewStore('/v'), { name: 'x', subtree: '/roadmap' });
+    expect(r.kind).toBe('native');
+    expect(r.diagnostics.map((d) => d.code)).toContain('view-input');
+  });
+
+  it('stays native when the input is not an object', () => {
+    for (const bad of [null, 'Roadmap board', ['x'], 3]) {
+      expect(resolveViewStore(viewStore('/v'), bad).kind).toBe('native');
+    }
+  });
+
+  it('stays native when the host handed no layout', () => {
+    const r = resolveViewStore({ root: '/v', mode: 'ro', kind: 'task' }, viewInput());
+    expect(r.kind).toBe('native');
+    expect(r.diagnostics.map((d) => d.code)).toContain('view-layout');
+  });
+
+  it('clamps the projection as a marker block is clamped: write-back is inert, the board stays ro', () => {
+    const view = makeView('R3-658.mdx');
+    scratch.push(view);
+    const projection = { ...boardMarker().projection, writable: ['column'] };
+    const r = resolveViewStore(viewStore(view), { ...viewInput(), projection });
+    expect(r.kind).toBe('projected');
+    if (r.kind !== 'projected') return;
+    expect(r.store.mode).toBe('ro');
+    expect(r.diagnostics.map((d) => d.code)).toEqual(['projection.writable']);
+  });
+
+  it('a subtree the clamps refuse leaves the records unreachable — native, never widened', () => {
+    const r = resolveViewStore(viewStore('/v'), { ...viewInput(), subtree: '/../etc' });
+    expect(r.kind).toBe('native');
+    expect(r.diagnostics.map((d) => d.code)).toContain('projection.mount');
   });
 });
