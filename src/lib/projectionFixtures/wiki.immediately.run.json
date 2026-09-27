@@ -1,6 +1,53 @@
 {
   "opensWith": { "task": "open-wiki", "version": "1.0" },
   "kind": "wiki",
+  "views": [
+    {
+      "name": "Roadmap board",
+      "opensWith": {
+        "app": "github:immediately-run/kanban-board",
+        "version": "1.0"
+      },
+      "subtree": "/roadmap",
+      "projection": {
+        "source": {
+          "recordSet": "roadmap-items"
+        },
+        "map": {
+          "id": {
+            "from": "frontmatter.id"
+          },
+          "title": {
+            "from": "frontmatter.title"
+          },
+          "column": {
+            "from": "frontmatter.status",
+            "values": [
+              "available",
+              "in-progress",
+              "in-review",
+              "deferred",
+              "deprioritized",
+              "superseded"
+            ]
+          },
+          "order": {
+            "from": "frontmatter.order"
+          },
+          "labels": {
+            "from": "frontmatter.tags"
+          },
+          "body": {
+            "from": "content"
+          },
+          "updated": {
+            "from": "frontmatter.updated"
+          }
+        },
+        "writable": []
+      }
+    }
+  ],
   "components": {
     "RoadmapBoard": "./components/RoadmapBoard.tsx",
     "RoadmapMeta": "./components/RoadmapMeta.tsx",
@@ -47,7 +94,6 @@
     "tree": {
       "/roadmap": { "purpose": "the live engineering roadmap, one file per work item" },
       "/roadmap/archive": { "purpose": "done items, moved here by the owner's tooling" },
-      "/roadmap/board": { "purpose": "the kanban view of /roadmap; landed by R3-549", "bundle": true },
       "/specs": { "purpose": "one spec per area" },
       "/context": { "purpose": "the resident context set and the routed documents" },
       "/status": { "purpose": "per-spec implementation status" },

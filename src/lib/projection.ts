@@ -468,9 +468,12 @@ export function resolveViewStore(taskStore: Store, view: unknown): ProjectedReso
     return { kind: 'native', diagnostics: [{ code: 'view-input', message: 'the view input is not an object' }] };
   }
   const v = view as { subtree?: unknown; projection?: unknown };
-  if (typeof v.subtree !== 'string' || v.projection === undefined) {
-    return { kind: 'native', diagnostics: [{ code: 'view-input', message: 'the view carries no projection' }] };
+  if (typeof v.subtree !== 'string') {
+    return { kind: 'native', diagnostics: [{ code: 'view-input', message: 'the view names no subtree' }] };
   }
+  // §4b.1a makes `projection` optional: a view without one is the folder opened natively,
+  // which is not a fault to tell the reader about.
+  if (v.projection === undefined) return { kind: 'native', diagnostics: [] };
   const { projection, diagnostics } = parseProjectionMarker({
     projection: v.projection,
     requests: { mounts: [{ at: '/view', uri: 'bundle:.', subtree: v.subtree }] },

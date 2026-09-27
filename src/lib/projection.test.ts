@@ -7,9 +7,9 @@
 // The fixtures under `projectionFixtures/` are verbatim copies, named for their
 // provenance:
 //   · `board.immediately.run.json`  — docs/content/roadmap/board/immediately.run.json
-//     (the marker this item lands)
+//     (the marker R3-549 landed; retired by R3-789, kept for the marker-bundle path)
 //   · `wiki.immediately.run.json`   — docs/content/immediately.run.json (the owner's
-//     layout declaration, R3-545)
+//     layout declaration, R3-545, and its declared `views`, R3-789)
 //   · `R3-658.mdx`                  — a live item, `status: available`
 //   · `R3-637.mdx`                  — a live item, `status: in-progress`
 //   · `R3-434.mdx`                  — an archived item, `status: done` — the terminal
@@ -577,7 +577,12 @@ describe('the record-set dir maps through the declared (subtree → mount) pair 
 describe('resolveViewStore — a declared view (R3-789, §4b.1a)', () => {
   // The host delegated the view's subtree AS the folder and handed the view's declaration
   // over as task input; there is no marker at the folder, so nothing is read from it.
-  const viewInput = () => ({ name: 'Roadmap board', subtree: '/roadmap', projection: boardMarker().projection });
+  // The input exactly as the host hands it (site-main `runDeclaredView`): the view the REAL
+  // wiki marker declares, its projection as the host's clamp returns it (`writable` → []).
+  const viewInput = () => {
+    const v = wikiMarker().views[0];
+    return { name: v.name, subtree: v.subtree, projection: { ...v.projection, writable: [] } };
+  };
   const viewStore = (root: string) => ({
     root,
     mode: 'ro' as const,
@@ -600,10 +605,17 @@ describe('resolveViewStore — a declared view (R3-789, §4b.1a)', () => {
     expect(cardsIn(snap!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-637']);
   });
 
-  it('stays native with a diagnostic when the view carries no projection', () => {
-    const r = resolveViewStore(viewStore('/v'), { name: 'x', subtree: '/roadmap' });
+  it('a view without a projection (§4b.1a allows it) is native, and SILENT — nothing to toast', () => {
+    expect(resolveViewStore(viewStore('/v'), { name: 'x', subtree: '/roadmap' })).toEqual({
+      kind: 'native',
+      diagnostics: [],
+    });
+  });
+
+  it('a view with no subtree is native with a diagnostic naming the subtree', () => {
+    const r = resolveViewStore(viewStore('/v'), { ...viewInput(), subtree: 7 });
     expect(r.kind).toBe('native');
-    expect(r.diagnostics.map((d) => d.code)).toContain('view-input');
+    expect(r.diagnostics.map((d) => d.message)).toEqual(['the view names no subtree']);
   });
 
   it('stays native when the input is not an object', () => {
