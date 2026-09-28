@@ -7,9 +7,9 @@
 // The fixtures under `projectionFixtures/` are verbatim copies, named for their
 // provenance:
 //   · `board.immediately.run.json`  — docs/content/roadmap/board/immediately.run.json
-//     (the marker this item lands)
+//     (the marker R3-549 landed; retired by R3-789, kept for the marker-bundle path)
 //   · `wiki.immediately.run.json`   — docs/content/immediately.run.json (the owner's
-//     layout declaration, R3-545)
+//     layout declaration, R3-545, and its declared `views`, R3-789)
 //   · `R3-658.mdx`                  — a live item, `status: available`
 //   · `R3-637.mdx`                  — a live item, `status: in-progress`
 //   · `R3-434.mdx`                  — an archived item, `status: done` — the terminal
@@ -37,6 +37,7 @@ import {
   readProjectedBoard,
   resolveProjection,
   resolveProjectedStore,
+  resolveViewStore,
   type ProjectedStore,
 } from './projection';
 import { cardsIn, type Card, type Column } from './board';
@@ -570,5 +571,79 @@ describe('the record-set dir maps through the declared (subtree → mount) pair 
     const { resolved, diagnostics } = resolveProjection(projection!, prunedLayout(), '/items');
     expect(resolved).toBeNull();
     expect(diagnostics.map((d) => d.code)).toContain('projection.mount');
+  });
+});
+
+describe('resolveViewStore — a declared view (R3-789, §4b.1a)', () => {
+  // The host delegated the view's subtree AS the folder and handed the view's declaration
+  // over as task input; there is no marker at the folder, so nothing is read from it.
+  // The input exactly as the host hands it (site-main `runDeclaredView`): the view the REAL
+  // wiki marker declares, its projection as the host's clamp returns it (`writable` → []).
+  const viewInput = () => {
+    const v = wikiMarker().views[0];
+    return { name: v.name, subtree: v.subtree, projection: { ...v.projection, writable: [] } };
+  };
+  const viewStore = (root: string) => ({
+    root,
+    mode: 'ro' as const,
+    kind: 'task' as const,
+    bundle: { kind: 'wiki', layout: prunedLayout() },
+  });
+
+  it('projects the delegated folder itself, read-only, and reads the records in it', async () => {
+    const view = makeView('R3-658.mdx', 'R3-637.mdx', 'R3-434.mdx');
+    scratch.push(view);
+    const r = resolveViewStore(viewStore(view), viewInput());
+    expect(r.kind).toBe('projected');
+    if (r.kind !== 'projected') return;
+    expect(r.diagnostics).toEqual([]);
+    expect(r.store.root).toBe(view);
+    expect(r.store.mode).toBe('ro');
+    expect(r.store.projection.sourceDir).toBe(view);
+    const snap = await readProjectedBoard(r.store, r.store.projection);
+    expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
+    expect(cardsIn(snap!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-637']);
+  });
+
+  it('a view without a projection (§4b.1a allows it) is native, and SILENT — nothing to toast', () => {
+    expect(resolveViewStore(viewStore('/v'), { name: 'x', subtree: '/roadmap' })).toEqual({
+      kind: 'native',
+      diagnostics: [],
+    });
+  });
+
+  it('a view with no subtree is native with a diagnostic naming the subtree', () => {
+    const r = resolveViewStore(viewStore('/v'), { ...viewInput(), subtree: 7 });
+    expect(r.kind).toBe('native');
+    expect(r.diagnostics.map((d) => d.message)).toEqual(['the view names no subtree']);
+  });
+
+  it('stays native when the input is not an object', () => {
+    for (const bad of [null, 'Roadmap board', ['x'], 3]) {
+      expect(resolveViewStore(viewStore('/v'), bad).kind).toBe('native');
+    }
+  });
+
+  it('stays native when the host handed no layout', () => {
+    const r = resolveViewStore({ root: '/v', mode: 'ro', kind: 'task' }, viewInput());
+    expect(r.kind).toBe('native');
+    expect(r.diagnostics.map((d) => d.code)).toContain('view-layout');
+  });
+
+  it('clamps the projection as a marker block is clamped: write-back is inert, the board stays ro', () => {
+    const view = makeView('R3-658.mdx');
+    scratch.push(view);
+    const projection = { ...boardMarker().projection, writable: ['column'] };
+    const r = resolveViewStore(viewStore(view), { ...viewInput(), projection });
+    expect(r.kind).toBe('projected');
+    if (r.kind !== 'projected') return;
+    expect(r.store.mode).toBe('ro');
+    expect(r.diagnostics.map((d) => d.code)).toEqual(['projection.writable']);
+  });
+
+  it('a subtree the clamps refuse leaves the records unreachable — native, never widened', () => {
+    const r = resolveViewStore(viewStore('/v'), { ...viewInput(), subtree: '/../etc' });
+    expect(r.kind).toBe('native');
+    expect(r.diagnostics.map((d) => d.code)).toContain('projection.mount');
   });
 });

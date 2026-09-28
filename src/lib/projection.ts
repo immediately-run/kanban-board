@@ -455,6 +455,52 @@ export async function resolveProjectedStore(taskStore: Store, mounts: readonly S
   };
 }
 
+/**
+ * R3-789 (BUNDLE_EMBEDDING §4b.1a) — the projected store for a DECLARED VIEW: the host opened
+ * a named view of a bundle, delegated the view's subtree AS this callee's folder (carrying the
+ * owner's layout pruned to it), and handed the view's clamped declaration over as task input.
+ * There is no marker at the folder to read, so the projection comes from the input — parsed by
+ * the SAME clamps a marker's block gets (`parseProjectionMarker`), with the view's `subtree` as
+ * its one covering mount: the folder IS that subtree.
+ */
+export function resolveViewStore(taskStore: Store, view: unknown): ProjectedResolution {
+  if (!view || typeof view !== 'object' || Array.isArray(view)) {
+    return { kind: 'native', diagnostics: [{ code: 'view-input', message: 'the view input is not an object' }] };
+  }
+  const v = view as { subtree?: unknown; projection?: unknown };
+  if (typeof v.subtree !== 'string') {
+    return { kind: 'native', diagnostics: [{ code: 'view-input', message: 'the view names no subtree' }] };
+  }
+  // §4b.1a makes `projection` optional: a view without one is the folder opened natively,
+  // which is not a fault to tell the reader about.
+  if (v.projection === undefined) return { kind: 'native', diagnostics: [] };
+  const { projection, diagnostics } = parseProjectionMarker({
+    projection: v.projection,
+    requests: { mounts: [{ at: '/view', uri: 'bundle:.', subtree: v.subtree }] },
+  });
+  if (projection === null) return { kind: 'native', diagnostics };
+  const bundle = taskStore.bundle;
+  const layout = bundle?.layout;
+  if (bundle === undefined || layout === undefined) {
+    return { kind: 'native', diagnostics: [...diagnostics, { code: 'view-layout', message: 'the view carries no layout' }] };
+  }
+  const { resolved, diagnostics: resolveDiags } = resolveProjection(projection, layout, taskStore.root);
+  const all = [...diagnostics, ...resolveDiags];
+  if (resolved === null) return { kind: 'native', diagnostics: all };
+  return {
+    kind: 'projected',
+    store: {
+      root: taskStore.root,
+      mode: 'ro',
+      kind: 'task',
+      ...(taskStore.name !== undefined ? { name: taskStore.name } : {}),
+      bundle: { ...bundle, layout },
+      projection: resolved,
+    },
+    diagnostics: all,
+  };
+}
+
 // ── read: records → BoardSnapshot ───────────────────────────────────────────────
 
 /** The projected board's meta: one board per bundle, columns from the map's `values` in

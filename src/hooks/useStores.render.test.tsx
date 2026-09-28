@@ -14,13 +14,14 @@
 
 import { act } from 'react';
 import { useState } from 'react';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxMount } from '@immediately-run/sdk/mounts';
 import type { TaskInput } from '@immediately-run/sdk/tasks';
+import { pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
 
 const DIR = '/task/s1/dir';
 
@@ -356,5 +357,57 @@ describe('a delegated directory that cannot be read settles the task (R3-548)', 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// R3-789 (§4b.1a): a DECLARED VIEW boots from its task input. The folder the host delegates
+// IS the view's subtree and carries no marker, so the marker path would find nothing and
+// render natively; this is the branch that must pick the view path instead.
+describe('a declared-view boot projects from the task input (R3-789)', () => {
+  const FIX = join(process.cwd(), 'src', 'lib', 'projectionFixtures');
+  const wiki = JSON.parse(readFileSync(join(FIX, 'wiki.immediately.run.json'), 'utf8'));
+  let view: string;
+  let host: HTMLDivElement;
+  beforeEach(() => {
+    view = mkdtempSync(join(tmpdir(), 'kanban-view-'));
+    cpSync(join(FIX, 'R3-658.mdx'), join(view, 'R3-658.mdx'));
+    const v = wiki.views[0];
+    taskInput = {
+      task: 'open-declared',
+      params: { dir: view, view: { name: v.name, subtree: v.subtree, projection: { ...v.projection, writable: [] } } },
+    };
+    const layout = pruneLayoutToView(wiki.layout as BundleLayout, v.subtree);
+    mounts = [{ path: view, type: 'chroot', id: view, mode: 'ro', bundle: { kind: 'wiki', layout } } as SandboxMount];
+    host = document.createElement('div');
+    document.body.appendChild(host);
+  });
+  afterEach(() => {
+    host.remove();
+    rmSync(view, { recursive: true, force: true });
+  });
+
+  it('the store is the projected, read-only view over the delegated folder — not the native board the marker path gives', async () => {
+    const captured: { api?: ReturnType<typeof useStores> } = {};
+    function Capture() {
+      const api = useStores();
+      React.useEffect(() => {
+        captured.api = api;
+      });
+      return null;
+    }
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(Capture));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    const store = captured.api!.store as { root: string; mode: string; projection?: { sourceDir: string } };
+    expect(store.projection).toBeDefined();
+    expect(store.mode).toBe('ro');
+    expect(store.projection!.sourceDir).toBe(view);
+    expect(captured.api!.bootNotices).toEqual([]);
+    // The folder carries no marker: the marker path (`resolveProjectedStore`) would resolve
+    // native here, so a projected store proves the view branch ran.
+    expect(readdirSync(view)).toEqual(['R3-658.mdx']);
+    await act(async () => root.unmount());
   });
 });
