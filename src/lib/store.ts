@@ -162,11 +162,29 @@ export async function removeFile(path: string): Promise<void> {
 export const newId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-/**
- * Poll a directory for changes (shared spaces get NO remote watch events, so this is
- * the live-update mechanism). Calls `onChange` when the (name → mtime/size) map
- * differs from the last poll. Returns a stop function.
- */
+/** R3-901 — the SPACE-side live-update mechanism: one recursive
+ *  fs.promises.watch, fired by the host's watch relay (R3-409) for REMOTE
+ *  writes (recursive, with the changed path; live-verified 2026-10-01). Own
+ *  writes still echo locally; the callers' reload is idempotent (FILESYSTEM_SPEC
+ *  §2.2). Returns a stop function. */
+export function watchDir(dir: string, onChange: () => void): () => void {
+  const ac = new AbortController();
+  void (async () => {
+    try {
+      for await (const ev of fs.promises.watch(dir, { recursive: true, signal: ac.signal })) {
+        void ev; // the event is the signal; the reload re-reads wholesale
+        onChange();
+      }
+    } catch {
+      /* aborted on teardown, or the dir vanished */
+    }
+  })();
+  return () => ac.abort();
+}
+
+/** The bundle-PROJECTION case (R3-549): a projected store reads a marker-only
+ *  bundle's source directory, which the space watch relay does not cover — the
+ *  projection keeps its §7.1-stated poll cadence. Space stores use watchDir. */
 export function pollDir(dir: string, onChange: () => void, intervalMs = 3000): () => void {
   let last: string | null = null; // null = never polled (an empty dir is a valid '' signature)
   let stopped = false;

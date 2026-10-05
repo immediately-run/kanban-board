@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelTask } from '@immediately-run/sdk/tasks';
 import {
-  boardDir,
+
   boardsDir,
   byOrder,
   cardsDir,
@@ -22,10 +22,9 @@ import {
   type BoardSnapshot,
   type Card,
 } from '../lib/board';
-import { assertRootReadable, newId, pollDir, type Store } from '../lib/store';
+import { assertRootReadable, newId, pollDir, watchDir, type Store } from '../lib/store';
 import { isProjectedStore } from '../lib/projection';
 
-const POLL_MS = 2500;
 /** R3-549 (BUNDLE_EMBEDDING §7.1): the projected poll's stated cost — one stat per
  *  record per ~3s tick over the delegated view. */
 const PROJECTED_POLL_MS = 3000;
@@ -223,12 +222,14 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       return () => stops.forEach((s) => s());
     }
     if (!store.spaceId) return;
-    const stops = [
-      pollDir(cardsDir(store, boardId), onChange, POLL_MS),
-      pollDir(boardDir(store, boardId), onChange, POLL_MS),
-      pollDir(boardsDir(store), () => void listBoards(store).then(setBoards), POLL_MS * 2),
-    ];
-    return () => stops.forEach((s) => s());
+    // R3-901: ONE recursive watch on boards/ replaces the three per-dir polls
+    // (cards/ and the board dir live under boards/, and the relay reports the
+    // changed path) — no 2–6 s cadence remains on a space store.
+    const stop = watchDir(boardsDir(store), () => {
+      onChange();
+      void listBoards(store).then(setBoards);
+    });
+    return () => stop();
   }, [store, boardId, reload, setBoards]);
 
   // ── mutation plumbing ────────────────────────────────────────────────────────
