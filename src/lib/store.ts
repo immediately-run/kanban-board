@@ -163,25 +163,32 @@ export async function removeFile(path: string): Promise<void> {
 export const newId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-/** R3-901 — one recursive watch replaces the 2–4 s pollDir signature loops:
- *  the host's watch relay (R3-409) surfaces REMOTE writes as fs.promises.watch
- *  events, recursively, with the changed path. Own writes still echo locally
- *  (the callers' reload is idempotent, exactly as the poll's wholesale reload
- *  was — no byte-dedupe needed, FILESYSTEM_SPEC §2.2).
+/** One recursive watch replaces the 2–4 s pollDir signature loops: the host's
+ *  watch relay (R3-409) surfaces REMOTE writes as fs.promises.watch events,
+ *  recursively, with the changed path (FILESYSTEM_SPEC §2.2). Own writes still
+ *  echo locally; the callers' reload is idempotent, exactly as the poll's
+ *  wholesale reload was — no byte-dedupe needed.
  *
- *  Two platform facts shape this helper (review round 1, both reproduced):
+ *  Three platform facts shape this helper (review rounds 1–2, reproduced):
  *   1. ZenFS core and the sandbox relay IGNORE AbortSignal — the iterator's own
  *      `return()` is the only stop both honour (ends the for-await; the relay
  *      unsubscribes its listener in cleanup). So no AbortController here.
  *   2. A recursive watch on a not-yet-created dir never fires even after the
- *      dir appears (and non-recursive rejects ENOENT) — so create-then-watch. */
+ *      dir appears (and non-recursive rejects ENOENT) — so create-then-watch.
+ *   3. The setup leg can itself fail (a read-only mount without the dir yet —
+ *      mkdir answers EROFS): end quietly like a poll's failed tick, never an
+ *      unhandled rejection. */
 export function watchDir(dir: string, onChange: () => void): () => void {
   let stopped = false;
   let end = () => {
     stopped = true;
   };
   void (async () => {
-    await ensureDir(dir);
+    try {
+      await ensureDir(dir);
+    } catch {
+      return; // fact 3
+    }
     if (stopped) return;
     // The ambient type says AsyncIterable (no `return`); the RUNTIME iterator
     // (ZenFS core + dev-fs) implements it — the only stop both honour.
@@ -201,8 +208,11 @@ export function watchDir(dir: string, onChange: () => void): () => void {
         void ev; // the event is the signal; the reload re-reads wholesale
         if (!stopped) onChange();
       }
-    } catch {
-      /* the iterator threw (dir gone, transport died) — live updates stop */
+    } catch (err) {
+      // A throw from the iterator (transport death, mid-stream teardown) ends
+      // live updates for this mount — the poll's failed tick retried; this is
+      // terminal, so it is surfaced, never swallowed.
+      if (!stopped) console.warn(`[store] watch on ${dir} ended:`, err);
     }
   })();
   return () => end();
