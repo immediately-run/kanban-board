@@ -1,5 +1,6 @@
 // Boards + the open board's cards for one Store, with optimistic mutations and
-// (for shared spaces) a directory poll that pulls other members' changes in.
+// (for shared spaces) a directory WATCH that pulls other members' changes in
+// (R3-901 — the host's watch relay; the bundle-projection leg keeps its §7.1 poll).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelTask } from '@immediately-run/sdk/tasks';
 import {
@@ -204,7 +205,7 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
     };
   }, [store, boardId, bKey]);
 
-  // ── polling (shared spaces only: there are no remote watch events) ───────────
+  // ── live updates: the space watch (R3-901) / the projection's §7.1 poll ──
   useEffect(() => {
     if (!store || !boardId) return;
     const onChange = () => {
