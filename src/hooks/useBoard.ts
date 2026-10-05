@@ -223,7 +223,7 @@ export function useBoard({ store, boardId, onBoardChange, by, onRemoteUpdate, on
       return () => stops.forEach((s) => s());
     }
     if (!store.spaceId) return;
-    // R3-901: ONE recursive watch on boards/ replaces the three per-dir polls
+    // R3-901: one recursive watch on boards/ replaces the three per-dir polls
     // (cards/ and the board dir live under boards/, and the relay reports the
     // changed path) — no 2–6 s cadence remains on a space store.
     const stop = watchDir(boardsDir(store), () => {
