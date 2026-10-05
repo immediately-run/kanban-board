@@ -1,7 +1,8 @@
 // Persistence over the immediately.run filesystem — the canonical pattern for the
 // example apps. Validated on the host 2026-08-27 (spike): openSettings, createSpace,
-// requestMount, mount('space:<id>') all work; fs.promises.watch fires ONLY for this
-// tab's own writes, so shared stores are polled.
+// requestMount, mount('space:<id>') all work. The spike's "watch fires ONLY for own
+// writes" finding is superseded: R3-409's relay (live-verified 2026-10-01) surfaces
+// remote writes as fs.promises.watch events, so shared stores WATCH (R3-901).
 //
 // Import from SDK subpaths (never the package barrel): the barrel has a module-eval
 // side effect that throws under plain `vite dev` (no host transport).
@@ -162,11 +163,66 @@ export async function removeFile(path: string): Promise<void> {
 export const newId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-/**
- * Poll a directory for changes (shared spaces get NO remote watch events, so this is
- * the live-update mechanism). Calls `onChange` when the (name → mtime/size) map
- * differs from the last poll. Returns a stop function.
- */
+/** One recursive watch replaces the 2–4 s pollDir signature loops: the host's
+ *  watch relay (R3-409) surfaces remote writes as fs.promises.watch events,
+ *  recursively, with the changed path (FILESYSTEM_SPEC §2.2). Own writes still
+ *  echo locally; the callers' reload is idempotent, exactly as the poll's
+ *  wholesale reload was — no byte-dedupe needed.
+ *
+ *  Three platform facts shape this helper (review rounds 1–2, reproduced):
+ *   1. ZenFS core and the sandbox relay ignore AbortSignal — the iterator's own
+ *      `return()` is the only stop both honour (ends the for-await; the relay
+ *      unsubscribes its listener in cleanup). So no AbortController here.
+ *   2. A recursive watch on a not-yet-created dir never fires even after the
+ *      dir appears (and non-recursive rejects ENOENT) — so create-then-watch.
+ *   3. The setup leg can itself fail (a read-only mount without the dir yet —
+ *      mkdir answers EROFS): end quietly like a poll's failed tick, never an
+ *      unhandled rejection. */
+export function watchDir(dir: string, onChange: () => void): () => void {
+  let stopped = false;
+  let end = () => {
+    stopped = true;
+  };
+  void (async () => {
+    try {
+      await ensureDir(dir);
+    } catch {
+      return; // fact 3
+    }
+    if (stopped) return;
+    // The ambient type says AsyncIterable (no `return`); the runtime iterator
+    // (ZenFS core + dev-fs) implements it — the only stop both honour.
+    const it = fs.promises.watch(dir, { recursive: true }) as AsyncIterable<unknown> & {
+      return?: () => Promise<unknown>;
+    };
+    if (stopped) {
+      void it.return?.();
+      return;
+    }
+    end = () => {
+      stopped = true;
+      void it.return?.();
+    };
+    try {
+      for await (const ev of it) {
+        void ev; // the event is the signal; the reload re-reads wholesale
+        if (!stopped) onChange(); // one reload per event — bursts are NOT coalesced
+        // (a rm+write pair re-reads twice); accepted: the reload is idempotent and
+        // the deleted poll coalesced only by being 3000x slower.
+      }
+    } catch (err) {
+      // A throw from the iterator (transport death, mid-stream teardown) ends
+      // live updates for this mount — the poll's failed tick retried; this is
+      // terminal, so it is surfaced, never swallowed.
+      if (!stopped) console.warn(`[store] watch on ${dir} ended:`, err);
+    }
+  })();
+  return () => end();
+}
+
+/** The bundle-PROJECTION case (R3-549): a projected store reads a marker-only
+ *  bundle's source directory, which the space watch relay does not cover — the
+ *  projection keeps its §7.1-stated poll cadence. Space stores use watchDir. */
 export function pollDir(dir: string, onChange: () => void, intervalMs = 3000): () => void {
   let last: string | null = null; // null = never polled (an empty dir is a valid '' signature)
   let stopped = false;
