@@ -647,3 +647,66 @@ describe('resolveViewStore — a declared view (R3-789, §4b.1a)', () => {
     expect(r.diagnostics.map((d) => d.code)).toContain('projection.mount');
   });
 });
+
+// ── R3-1069 — repeated labels de-duplicated at the projection ────────────────
+
+describe('a record with a repeated label projects distinct labels (R3-1069)', () => {
+  // The live ledger carries items whose `tags:` repeat a value (claim.sh new
+  // appended `roadmap-item` unconditionally), and the chip renderers key by label
+  // text — React's duplicate-key error, a chip dropped or duplicated.
+  const duped = (view: string) => {
+    writeFileSync(
+      join(view, 'R3-9501.mdx'),
+      '---\n' +
+        'title: "Duped labels"\n' +
+        'id: R3-9501\n' +
+        'status: available\n' +
+        'order: 1\n' +
+        'updated: 2026-10-08\n' +
+        'tags: [BUG, roadmap-item, roadmap-item]\n' +
+        '---\n' +
+        '\n' +
+        'Body.\n',
+    );
+  };
+
+  it('the projection de-duplicates, keeping first-seen order', async () => {
+    const view = makeView();
+    scratch.push(view);
+    duped(view);
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.id === 'R3-9501')!;
+    expect(card.labels).toEqual(['BUG', 'roadmap-item']);
+  });
+
+  it('the rendered card modal logs no duplicate-key error', async () => {
+    const view = makeView();
+    scratch.push(view);
+    duped(view);
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.id === 'R3-9501')!;
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const container = await renderModal(card, snap!.meta.columns);
+      expect(container.textContent).toContain('roadmap-item');
+      const keyErrors = err.mock.calls.filter((c) => String(c[0]).includes('same key'));
+      expect(keyErrors).toEqual([]);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it('fault injection: the pre-fix mapping (no de-dupe) keeps the repeat', async () => {
+    // Proves the first test is non-vacuous: the raw record really does carry the
+    // repeated value, so only the projection's de-dupe removes it.
+    const view = makeView();
+    scratch.push(view);
+    duped(view);
+    const raw = readFileSync(join(view, 'R3-9501.mdx'), 'utf8');
+    expect(raw).toContain('roadmap-item, roadmap-item');
+  });
+});

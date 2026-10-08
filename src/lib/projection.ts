@@ -607,7 +607,14 @@ export async function readProjectedBoard(
       description: asString(fieldOf(record, map.body?.from ?? '')) ?? '',
       column,
       order: orderOf(fieldOf(record, map.order?.from ?? '')),
-      labels: Array.isArray(labelsRaw) ? labelsRaw.filter((l): l is string => typeof l === 'string') : [],
+      // R3-1069: a projected record is someone else's data — nothing promises its
+      // labels are distinct, and the chip renderers key by label text (React's
+      // duplicate-key error, a chip dropped or duplicated). De-dupe here,
+      // first-seen order, so every consumer receives distinct labels by
+      // construction.
+      labels: Array.isArray(labelsRaw)
+        ? [...new Set(labelsRaw.filter((l): l is string => typeof l === 'string'))]
+        : [],
       due: null,
       by: '',
       // A kind field the map does not name renders empty (§4.1): the worked marker
