@@ -120,3 +120,30 @@ describe('a bundle-fact store without a projection reads natively (R3-549)', () 
     }
   });
 });
+
+describe('a card file with repeated labels reads de-duplicated (R3-1069)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'kanban-board-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('asCard de-dupes labels (first-seen order) on the native read path', async () => {
+    // A card file is shareable data — any member or fork can write one; only the
+    // app's own writer (parseLabels) de-dupes, so the read must.
+    const store: Store = { root, mode: 'rw', kind: 'settings' };
+    const meta = await createBoard(store, 'Dupes', 'alice', true);
+    const snap = await readBoard(store, meta.id);
+    const card = snap!.cards[0];
+    const { writeFileSync } = await import('node:fs');
+    const { cardFile } = await import('./board');
+    writeFileSync(
+      cardFile(store, meta.id, card.id),
+      JSON.stringify({ ...card, labels: ['BUG', 'roadmap-item', 'roadmap-item'] }),
+    );
+    const reread = await readBoard(store, meta.id);
+    expect(reread!.cards.find((c) => c.id === card.id)!.labels).toEqual(['BUG', 'roadmap-item']);
+  });
+});
