@@ -100,7 +100,10 @@ function asCard(raw: unknown, id: string): Card | null {
     description: isStr(r.description) ? r.description : '',
     column: r.column,
     order: typeof r.order === 'number' && Number.isFinite(r.order) ? r.order : 0,
-    labels: Array.isArray(r.labels) ? r.labels.filter(isStr) : [],
+    // R3-1069: de-dupe (first-seen order) — a card file is shareable data any
+    // member or fork can write, and the chip renderers key by label text;
+    // only this app's own writer (parseLabels) de-dupes today.
+    labels: Array.isArray(r.labels) ? [...new Set(r.labels.filter(isStr))] : [],
     due: isStr(r.due) && r.due ? r.due : null,
     by: isStr(r.by) && r.by ? r.by : 'someone',
     created: isStr(r.created) ? r.created : new Date(0).toISOString(),

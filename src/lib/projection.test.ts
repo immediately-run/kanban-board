@@ -700,7 +700,7 @@ describe('a record with a repeated label projects distinct labels (R3-1069)', ()
     }
   });
 
-  it('fault injection: the pre-fix mapping (no de-dupe) keeps the repeat', async () => {
+  it('fault injection: the fixture really carries the repeat (so the de-dupe test is non-vacuous)', async () => {
     // Proves the first test is non-vacuous: the raw record really does carry the
     // repeated value, so only the projection's de-dupe removes it.
     const view = makeView();
