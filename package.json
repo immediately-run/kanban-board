@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@immediately-run/mdx-plugins": "0.7.1",
-    "@immediately-run/sdk": "0.68.0",
+    "@immediately-run/sdk": "0.88.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },
