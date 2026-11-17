@@ -205,6 +205,38 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-9002', 'R3-9001', 'R3-9003']);
   });
 
+  it('typed frontmatter values (mdx-plugins 0.8.0, R3-1350) reach the card as typed values', async () => {
+    // The canon is YAML 1.2 since R3-1347: `order: 7.5` is a number and a tag list may hold
+    // a number and a boolean. Before 0.8.0 every value arrived as a string. Input from the
+    // real producer: the record is read through readProjectedBoard → parseFrontmatter.
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(
+      join(view, 'R3-9101.mdx'),
+      '---\ntitle: "Typed"\nid: R3-9101\nstatus: available\norder: 7.5\ntags: [roadmap-item, 2026, true]\nupdated: 2026-09-19\n---\n\nBody.\n',
+    );
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.id === 'R3-9101')!;
+    expect(card.order).toBe(7.5);
+    expect(card.updated).toBe('2026-09-19'); // the core schema has no dates: still a string
+    // The scalars are shown as text, as before 0.8.0 — not dropped for being typed.
+    expect(card.labels).toEqual(['roadmap-item', '2026', 'true']);
+  });
+
+  it('a numeric title or id is shown as text, not lost (R3-1350)', async () => {
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(join(view, 'R3-9102.mdx'), '---\ntitle: 2026\nid: 42\nstatus: available\n---\n\nBody.\n');
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.sourcePath === 'R3-9102.mdx')!;
+    expect(card.title).toBe('2026');
+    expect(card.id).toBe('42');
+  });
+
   it('a record that cannot be read is display-only in overflow, its filename the title (§4.3 rule 4)', async () => {
     const view = makeView('R3-658.mdx');
     scratch.push(view);

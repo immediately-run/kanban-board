@@ -13,7 +13,9 @@
 // imports nothing that writes — the write helpers of store.ts are not in its imports.
 
 import fs from 'fs';
-import { parseBundleLayout, parseFrontmatter, pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
+import { parseBundleLayout, pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
+// R3-1350: the YAML-backed canon (R3-1347) is on its own subpath; values are typed.
+import { parseFrontmatter } from '@immediately-run/mdx-plugins/frontmatter';
 import type { SandboxMount } from '@immediately-run/sdk/mounts';
 import { readText, type Store } from './store';
 import type { BoardMeta, BoardSnapshot, Card } from './board';
@@ -521,6 +523,13 @@ export function projectedBoardMeta(store: ProjectedStore): BoardMeta {
 
 const asString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
+/** A scalar frontmatter value as the text a card shows. Since mdx-plugins 0.8.0 (R3-1347)
+ *  frontmatter is YAML 1.2, so `title: 2026` arrives as a number and `tags: [x, true]`
+ *  holds a boolean — the old reader handed both over as strings, and a card must not
+ *  silently lose them now (R3-1350). Lists, maps and null are not text. */
+const asText = (v: unknown): string | undefined =>
+  typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean' ? String(v) : undefined;
+
 const fieldOf = (record: object, from: string): unknown => {
   let cur: unknown = record;
   for (const seg of from.split('.')) {
@@ -576,15 +585,15 @@ export async function readProjectedBoard(
         continue;
       }
     }
-    const column = record === null ? undefined : asString(fieldOf(record, map.column?.from ?? ''));
+    const column = record === null ? undefined : asText(fieldOf(record, map.column?.from ?? ''));
     const inColumn = column !== undefined && values.includes(column);
     if (record === null || !inColumn) {
       // Unparseable or unmapped: display-only in the overflow group, filename as the
       // title when the record names none (§4.3 rule 4, §4.1) — never written back,
       // never repaired.
       cards.push({
-        id: asString(record !== null ? fieldOf(record, map.id?.from ?? '') : undefined) ?? stem,
-        title: record !== null ? (asString(fieldOf(record, map.title?.from ?? '')) ?? stem) : stem,
+        id: asText(record !== null ? fieldOf(record, map.id?.from ?? '') : undefined) ?? stem,
+        title: record !== null ? (asText(fieldOf(record, map.title?.from ?? '')) ?? stem) : stem,
         description: '',
         column: projection.overflowId,
         order: orderOf(record !== null ? fieldOf(record, map.order?.from ?? '') : undefined),
@@ -595,15 +604,15 @@ export async function readProjectedBoard(
         // projected by the worked marker, so it stays empty rather than borrowing
         // `updated`.
         created: '',
-        updated: asString(record !== null ? fieldOf(record, map.updated?.from ?? '') : undefined) ?? '',
+        updated: asText(record !== null ? fieldOf(record, map.updated?.from ?? '') : undefined) ?? '',
         sourcePath: name,
       });
       continue;
     }
     const labelsRaw = fieldOf(record, map.labels?.from ?? '');
     cards.push({
-      id: asString(fieldOf(record, map.id?.from ?? '')) ?? stem,
-      title: asString(fieldOf(record, map.title?.from ?? '')) ?? '',
+      id: asText(fieldOf(record, map.id?.from ?? '')) ?? stem,
+      title: asText(fieldOf(record, map.title?.from ?? '')) ?? '',
       description: asString(fieldOf(record, map.body?.from ?? '')) ?? '',
       column,
       order: orderOf(fieldOf(record, map.order?.from ?? '')),
@@ -613,14 +622,14 @@ export async function readProjectedBoard(
       // first-seen order, so every consumer receives distinct labels by
       // construction.
       labels: Array.isArray(labelsRaw)
-        ? [...new Set(labelsRaw.filter((l): l is string => typeof l === 'string'))]
+        ? [...new Set(labelsRaw.map(asText).filter((l): l is string => l !== undefined))]
         : [],
       due: null,
       by: '',
       // A kind field the map does not name renders empty (§4.1): the worked marker
       // projects no `created`, so it stays empty rather than borrowing `updated`.
       created: '',
-      updated: asString(fieldOf(record, map.updated?.from ?? '')) ?? '',
+      updated: asText(fieldOf(record, map.updated?.from ?? '')) ?? '',
       sourcePath: name,
     });
   }
