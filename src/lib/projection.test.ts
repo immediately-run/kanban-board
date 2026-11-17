@@ -254,6 +254,32 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
   });
 
+  it('a record whose frontmatter stops parsing keeps the reader\'s card; with no previous card it is display-only (R3-1350)', async () => {
+    // Review 1-B-0: the 0.8.0 parser never throws — it reports a rejected block in
+    // `error`. A half-written record (`title: a: b`) must read as unreadable, not as an
+    // empty record that replaces the good card with a stem-titled overflow card.
+    const view = makeView();
+    scratch.push(view);
+    const good = '---\ntitle: "Was parseable"\nid: R3-9710\nstatus: in-progress\norder: 1\nupdated: 2026-09-19\n---\n\nBody.\n';
+    const broken = '---\ntitle: a: b\nid: R3-9710\nstatus: in-progress\n---\n\nBody.\n';
+    writeFileSync(join(view, 'R3-9710.mdx'), good);
+    const { store, projection } = projectedOver(view);
+    const first = await readProjectedBoard(store, projection);
+    expect(cardsIn(first!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-9710']);
+
+    writeFileSync(join(view, 'R3-9710.mdx'), broken);
+    const second = await readProjectedBoard(store, projection, first!);
+    const kept = second!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
+    expect(kept.title).toBe('Was parseable');
+    expect(kept.column).toBe('in-progress');
+
+    // A first read with no previous card: display-only in overflow, titled by the stem.
+    const cold = await readProjectedBoard(store, projection);
+    const shown = cold!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
+    expect(shown.column).toBe(projection.overflowId);
+    expect(shown.title).toBe('R3-9710');
+  });
+
   it('a record that becomes unreadable mid-poll keeps the reader\'s card for that cycle', async () => {
     const view = makeView();
     scratch.push(view);

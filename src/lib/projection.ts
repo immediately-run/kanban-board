@@ -525,8 +525,10 @@ const asString = (v: unknown): string | undefined => (typeof v === 'string' ? v 
 
 /** A scalar frontmatter value as the text a card shows. Since mdx-plugins 0.8.0 (R3-1347)
  *  frontmatter is YAML 1.2, so `title: 2026` arrives as a number and `tags: [x, true]`
- *  holds a boolean — the old reader handed both over as strings, and a card must not
- *  silently lose them now (R3-1350). Lists, maps and null are not text. */
+ *  holds a boolean; the old reader handed both over as strings, and a card must not
+ *  silently lose them now (R3-1350). The text is the VALUE's, not the author's spelling:
+ *  `1.10` shows as `1.1`, `0x10` as `16` — quote a value to keep its spelling. `.inf` and
+ *  `.nan` never arrive (the parser rejects the block). Lists, maps and null are not text. */
 const asText = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean' ? String(v) : undefined;
 
@@ -637,17 +639,17 @@ export async function readProjectedBoard(
 }
 
 /** One record through the canonical parser (`@immediately-run/mdx-plugins` — never a
- *  regex, never a second YAML library). A read or parse failure is `null`: the record is
- *  display-only, not dropped. */
+ *  regex, never a second YAML library). A read failure or a frontmatter block the parser
+ *  rejects is `null`: the caller keeps the previous card for that cycle, or shows the
+ *  record display-only — never an empty record that replaces a good card. Since 0.8.0
+ *  (R3-1347) the parser never throws; it reports a rejected block in `error`, so that is
+ *  what is checked here (R3-1350 review 1-B-0). */
 async function readRecord(path: string): Promise<object | null> {
   const text = await readText(path);
   if (text === null) return null;
-  try {
-    const { data, body } = parseFrontmatter(text);
-    return buildRecord(data as Record<string, unknown>, body);
-  } catch {
-    return null;
-  }
+  const { data, body, error } = parseFrontmatter(text);
+  if (error) return null;
+  return buildRecord(data as Record<string, unknown>, body);
 }
 
 /** Re-exported for the fixture tests: the layout half of the marker, through the one
