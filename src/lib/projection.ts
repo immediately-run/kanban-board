@@ -555,6 +555,15 @@ const orderOf = (v: unknown): number => {
  * render as text downstream; the body rides `description` until the card modal renders
  * it through safe-content.
  */
+/** The record files each snapshot showed from its PREVIOUS snapshot because they could not
+ *  be read or parsed (the mid-poll fallback below). Keyed weakly by snapshot, so it holds
+ *  nothing a reader has dropped and any number of boards share it safely. It is what limits
+ *  the fallback to ONE cycle: a record still unreadable on the next poll is not held over
+ *  again but goes to overflow, display-only (§4.3 rule 4) — without it a record that stayed
+ *  broken kept its stale card in its old column for as long as the reader polled (R3-1350
+ *  review 1-A-0). */
+const heldOver = new WeakMap<BoardSnapshot, ReadonlySet<string>>();
+
 export async function readProjectedBoard(
   store: ProjectedStore,
   projection: ResolvedProjection,
@@ -573,17 +582,22 @@ export async function readProjectedBoard(
   // up the reader's previous copy of the SAME record, and an id the frontmatter names
   // need not equal the filename stem.
   const prev = new Map((previous?.cards ?? []).map((c) => [c.sourcePath, c]));
+  const prevHeld = (previous && heldOver.get(previous)) ?? new Set<string>();
+  const held = new Set<string>();
   const cards: Card[] = [];
   for (const name of names.sort()) {
     if (name.startsWith('.') || !select.test(name)) continue;
     const stem = name.replace(/\.mdx?$/, '');
     const record = await readRecord(`${sourceDir}/${name}`);
     if (record === null) {
-      // Unreadable mid-poll: keep the reader's copy of the card for this cycle (the
-      // native read layer's own precedent) rather than dropping it.
+      // Unreadable or unparseable mid-poll: keep the reader's copy of the card for THIS
+      // cycle (the native read layer's own precedent) rather than dropping it — once. A
+      // card that was itself held over last cycle is not held again: the record is
+      // treated as unreadable below (overflow, display-only).
       const fallback = prev.get(name);
-      if (fallback) {
+      if (fallback && !prevHeld.has(name)) {
         cards.push(fallback);
+        held.add(name);
         continue;
       }
     }
@@ -635,7 +649,9 @@ export async function readProjectedBoard(
       sourcePath: name,
     });
   }
-  return { meta: projectedBoardMeta(store), cards };
+  const snapshot: BoardSnapshot = { meta: projectedBoardMeta(store), cards };
+  if (held.size) heldOver.set(snapshot, held);
+  return snapshot;
 }
 
 /** One record through the canonical parser (`@immediately-run/mdx-plugins` — never a

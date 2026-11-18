@@ -225,6 +225,20 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(card.labels).toEqual(['roadmap-item', '2026', 'true']);
   });
 
+  it('the typed reading is the one shown — not the source spelling the old reader passed through (R3-1350)', async () => {
+    // Review 1-A-1: inputs whose typed and string readings differ, so this case fails
+    // against a string-valued parser. YAML 1.2 reads `0x10` as 16 and `1.10` as 1.1.
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(join(view, 'R3-9103.mdx'), '---\ntitle: 1.10\nid: R3-9103\nstatus: available\ntags: [0x10, notes]\n---\n\nBody.\n');
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.sourcePath === 'R3-9103.mdx')!;
+    expect(card.title).toBe('1.1');
+    expect(card.labels).toEqual(['16', 'notes']);
+  });
+
   it('a numeric title or id is shown as text, not lost (R3-1350)', async () => {
     const view = makeView();
     scratch.push(view);
@@ -273,7 +287,22 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(kept.title).toBe('Was parseable');
     expect(kept.column).toBe('in-progress');
 
+    // Review 1-A-0: held over for ONE cycle only. Still broken on the next poll, it goes
+    // to overflow display-only (§4.3 rule 4) — and stays there on the poll after.
+    const third = await readProjectedBoard(store, projection, second!);
+    const moved = third!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
+    expect(moved.column).toBe(projection.overflowId);
+    expect(moved.title).toBe('R3-9710');
+    const fourth = await readProjectedBoard(store, projection, third!);
+    expect(fourth!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe(projection.overflowId);
+
+    // Fixed again, it is a normal card at once.
+    writeFileSync(join(view, 'R3-9710.mdx'), good);
+    const fifth = await readProjectedBoard(store, projection, fourth!);
+    expect(fifth!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe('in-progress');
+
     // A first read with no previous card: display-only in overflow, titled by the stem.
+    writeFileSync(join(view, 'R3-9710.mdx'), broken);
     const cold = await readProjectedBoard(store, projection);
     const shown = cold!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
     expect(shown.column).toBe(projection.overflowId);
