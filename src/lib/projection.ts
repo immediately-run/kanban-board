@@ -13,7 +13,9 @@
 // imports nothing that writes — the write helpers of store.ts are not in its imports.
 
 import fs from 'fs';
-import { parseBundleLayout, parseFrontmatter, pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
+import { parseBundleLayout, pruneLayoutToView, type BundleLayout } from '@immediately-run/mdx-plugins';
+// R3-1350: the YAML-backed canon (R3-1347) is on its own subpath; values are typed.
+import { parseFrontmatter } from '@immediately-run/mdx-plugins/frontmatter';
 import type { SandboxMount } from '@immediately-run/sdk/mounts';
 import { readText, type Store } from './store';
 import type { BoardMeta, BoardSnapshot, Card } from './board';
@@ -521,6 +523,15 @@ export function projectedBoardMeta(store: ProjectedStore): BoardMeta {
 
 const asString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
+/** A scalar frontmatter value as the text a card shows. Since mdx-plugins 0.8.0 (R3-1347)
+ *  frontmatter is YAML 1.2, so `title: 2026` arrives as a number and `tags: [x, true]`
+ *  holds a boolean; the old reader handed both over as strings, and a card must not
+ *  silently lose them now (R3-1350). The text is the VALUE's, not the author's spelling:
+ *  `1.10` shows as `1.1`, `0x10` as `16` — quote a value to keep its spelling. `.inf` and
+ *  `.nan` never arrive (the parser rejects the block). Lists, maps and null are not text. */
+const asText = (v: unknown): string | undefined =>
+  typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean' ? String(v) : undefined;
+
 const fieldOf = (record: object, from: string): unknown => {
   let cur: unknown = record;
   for (const seg of from.split('.')) {
@@ -566,25 +577,32 @@ export async function readProjectedBoard(
   for (const name of names.sort()) {
     if (name.startsWith('.') || !select.test(name)) continue;
     const stem = name.replace(/\.mdx?$/, '');
-    const record = await readRecord(`${sourceDir}/${name}`);
-    if (record === null) {
-      // Unreadable mid-poll: keep the reader's copy of the card for this cycle (the
-      // native read layer's own precedent) rather than dropping it.
+    const read = await readRecord(`${sourceDir}/${name}`);
+    if (read === UNREADABLE) {
+      // Unreadable mid-poll (the file could not be read at all): keep the reader's copy of
+      // the card (the native read layer's own precedent) rather than dropping it — until
+      // the file reads again, since the polling hook keeps a snapshot that looks the same
+      // (unchanged from before R3-1350). A frontmatter block the parser REJECTS is not this case: the file was
+      // read, and it says something the board cannot show, so it goes straight to overflow
+      // below, display-only (§4.3 rule 4) — holding its old card would show a stale column
+      // for as long as the file stays broken, because the polling hook keeps the previous
+      // snapshot whenever a new one looks the same (R3-1350 reviews 1-A-0, 2-r2-0).
       const fallback = prev.get(name);
       if (fallback) {
         cards.push(fallback);
         continue;
       }
     }
-    const column = record === null ? undefined : asString(fieldOf(record, map.column?.from ?? ''));
+    const record = read === UNREADABLE || read === REJECTED ? null : read;
+    const column = record === null ? undefined : asText(fieldOf(record, map.column?.from ?? ''));
     const inColumn = column !== undefined && values.includes(column);
     if (record === null || !inColumn) {
       // Unparseable or unmapped: display-only in the overflow group, filename as the
       // title when the record names none (§4.3 rule 4, §4.1) — never written back,
       // never repaired.
       cards.push({
-        id: asString(record !== null ? fieldOf(record, map.id?.from ?? '') : undefined) ?? stem,
-        title: record !== null ? (asString(fieldOf(record, map.title?.from ?? '')) ?? stem) : stem,
+        id: asText(record !== null ? fieldOf(record, map.id?.from ?? '') : undefined) ?? stem,
+        title: record !== null ? (asText(fieldOf(record, map.title?.from ?? '')) ?? stem) : stem,
         description: '',
         column: projection.overflowId,
         order: orderOf(record !== null ? fieldOf(record, map.order?.from ?? '') : undefined),
@@ -595,15 +613,15 @@ export async function readProjectedBoard(
         // projected by the worked marker, so it stays empty rather than borrowing
         // `updated`.
         created: '',
-        updated: asString(record !== null ? fieldOf(record, map.updated?.from ?? '') : undefined) ?? '',
+        updated: asText(record !== null ? fieldOf(record, map.updated?.from ?? '') : undefined) ?? '',
         sourcePath: name,
       });
       continue;
     }
     const labelsRaw = fieldOf(record, map.labels?.from ?? '');
     cards.push({
-      id: asString(fieldOf(record, map.id?.from ?? '')) ?? stem,
-      title: asString(fieldOf(record, map.title?.from ?? '')) ?? '',
+      id: asText(fieldOf(record, map.id?.from ?? '')) ?? stem,
+      title: asText(fieldOf(record, map.title?.from ?? '')) ?? '',
       description: asString(fieldOf(record, map.body?.from ?? '')) ?? '',
       column,
       order: orderOf(fieldOf(record, map.order?.from ?? '')),
@@ -613,32 +631,37 @@ export async function readProjectedBoard(
       // first-seen order, so every consumer receives distinct labels by
       // construction.
       labels: Array.isArray(labelsRaw)
-        ? [...new Set(labelsRaw.filter((l): l is string => typeof l === 'string'))]
+        ? [...new Set(labelsRaw.map(asText).filter((l): l is string => l !== undefined))]
         : [],
       due: null,
       by: '',
       // A kind field the map does not name renders empty (§4.1): the worked marker
       // projects no `created`, so it stays empty rather than borrowing `updated`.
       created: '',
-      updated: asString(fieldOf(record, map.updated?.from ?? '')) ?? '',
+      updated: asText(fieldOf(record, map.updated?.from ?? '')) ?? '',
       sourcePath: name,
     });
   }
   return { meta: projectedBoardMeta(store), cards };
 }
 
+/** A record file that could not be read at all. */
+const UNREADABLE = Symbol('unreadable');
+/** A record file that was read but whose frontmatter block the parser rejects. */
+const REJECTED = Symbol('rejected');
+
 /** One record through the canonical parser (`@immediately-run/mdx-plugins` — never a
- *  regex, never a second YAML library). A read or parse failure is `null`: the record is
- *  display-only, not dropped. */
-async function readRecord(path: string): Promise<object | null> {
+ *  regex, never a second YAML library). The two failures are told apart because the board
+ *  treats them differently: an UNREADABLE file keeps the reader's previous card until it
+ *  reads again; a REJECTED block (the parser never throws since 0.8.0 — it reports the block in
+ *  `error`, R3-1350 review 1-B-0) is shown display-only in overflow. Neither ever becomes
+ *  an empty record that replaces a good card. */
+async function readRecord(path: string): Promise<object | typeof UNREADABLE | typeof REJECTED> {
   const text = await readText(path);
-  if (text === null) return null;
-  try {
-    const { data, body } = parseFrontmatter(text);
-    return buildRecord(data as Record<string, unknown>, body);
-  } catch {
-    return null;
-  }
+  if (text === null) return UNREADABLE;
+  const { data, body, error } = parseFrontmatter(text);
+  if (error) return REJECTED;
+  return buildRecord(data as Record<string, unknown>, body);
 }
 
 /** Re-exported for the fixture tests: the layout half of the marker, through the one

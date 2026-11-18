@@ -205,6 +205,52 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-9002', 'R3-9001', 'R3-9003']);
   });
 
+  it('typed frontmatter values (mdx-plugins 0.8.0, R3-1350) reach the card as typed values', async () => {
+    // The canon is YAML 1.2 since R3-1347: `order: 7.5` is a number and a tag list may hold
+    // a number and a boolean. Before 0.8.0 every value arrived as a string. Input from the
+    // real producer: the record is read through readProjectedBoard → parseFrontmatter.
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(
+      join(view, 'R3-9101.mdx'),
+      '---\ntitle: "Typed"\nid: R3-9101\nstatus: available\norder: 7.5\ntags: [roadmap-item, 2026, true]\nupdated: 2026-09-19\n---\n\nBody.\n',
+    );
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.id === 'R3-9101')!;
+    expect(card.order).toBe(7.5);
+    expect(card.updated).toBe('2026-09-19'); // the core schema has no dates: still a string
+    // The scalars are shown as text, as before 0.8.0 — not dropped for being typed.
+    expect(card.labels).toEqual(['roadmap-item', '2026', 'true']);
+  });
+
+  it('the typed reading is the one shown — not the source spelling the old reader passed through (R3-1350)', async () => {
+    // Review 1-A-1: inputs whose typed and string readings differ, so this case fails
+    // against a string-valued parser. YAML 1.2 reads `0x10` as 16 and `1.10` as 1.1.
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(join(view, 'R3-9103.mdx'), '---\ntitle: 1.10\nid: R3-9103\nstatus: available\ntags: [0x10, notes]\n---\n\nBody.\n');
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.sourcePath === 'R3-9103.mdx')!;
+    expect(card.title).toBe('1.1');
+    expect(card.labels).toEqual(['16', 'notes']);
+  });
+
+  it('a numeric title or id is shown as text, not lost (R3-1350)', async () => {
+    const view = makeView();
+    scratch.push(view);
+    writeFileSync(join(view, 'R3-9102.mdx'), '---\ntitle: 2026\nid: 42\nstatus: available\n---\n\nBody.\n');
+    const { store, projection } = projectedOver(view);
+
+    const snap = await readProjectedBoard(store, projection);
+    const card = snap!.cards.find((c) => c.sourcePath === 'R3-9102.mdx')!;
+    expect(card.title).toBe('2026');
+    expect(card.id).toBe('42');
+  });
+
   it('a record that cannot be read is display-only in overflow, its filename the title (§4.3 rule 4)', async () => {
     const view = makeView('R3-658.mdx');
     scratch.push(view);
@@ -220,6 +266,39 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(overflow[0].sourcePath).toBe('R3-9600.mdx');
     // The readable record is unaffected.
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
+  });
+
+  it('a record whose frontmatter stops parsing goes straight to overflow, display-only (R3-1350)', async () => {
+    // The 0.8.0 parser never throws — it reports a rejected block in `error` (review 1-B-0).
+    // The file WAS read, so this is not the unreadable-mid-poll case: holding its previous
+    // card would show a stale column for as long as the file stays broken, because the
+    // polling hook keeps the previous snapshot whenever the new one looks the same (reviews
+    // 1-A-0, 2-r2-0). It goes to overflow at once (§4.3 rule 4) and recovers on repair.
+    const view = makeView();
+    scratch.push(view);
+    const good = '---\ntitle: "Was parseable"\nid: R3-9710\nstatus: in-progress\norder: 1\nupdated: 2026-09-19\n---\n\nBody.\n';
+    const broken = '---\ntitle: a: b\nid: R3-9710\nstatus: done\n---\n\nBody.\n';
+    writeFileSync(join(view, 'R3-9710.mdx'), good);
+    const { store, projection } = projectedOver(view);
+    const first = await readProjectedBoard(store, projection);
+    expect(cardsIn(first!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-9710']);
+
+    writeFileSync(join(view, 'R3-9710.mdx'), broken);
+    // With the reader's previous snapshot, as the hook passes it: never the stale card.
+    const second = await readProjectedBoard(store, projection, first!);
+    const shown = second!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
+    expect(shown.column).toBe(projection.overflowId);
+    expect(shown.title).toBe('R3-9710');
+    expect(shown.description).toBe('');
+    // The hook may hand back the SAME previous snapshot again (it keeps a canon-equal one):
+    // the answer does not change.
+    const again = await readProjectedBoard(store, projection, first!);
+    expect(again!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe(projection.overflowId);
+
+    // Repaired, it is a normal card at once.
+    writeFileSync(join(view, 'R3-9710.mdx'), good);
+    const fixed = await readProjectedBoard(store, projection, second!);
+    expect(fixed!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe('in-progress');
   });
 
   it('a record that becomes unreadable mid-poll keeps the reader\'s card for that cycle', async () => {
