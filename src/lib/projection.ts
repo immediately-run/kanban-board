@@ -580,8 +580,9 @@ export async function readProjectedBoard(
     const read = await readRecord(`${sourceDir}/${name}`);
     if (read === UNREADABLE) {
       // Unreadable mid-poll (the file could not be read at all): keep the reader's copy of
-      // the card for this cycle (the native read layer's own precedent) rather than
-      // dropping it. A frontmatter block the parser REJECTS is not this case: the file was
+      // the card (the native read layer's own precedent) rather than dropping it — until
+      // the file reads again, since the polling hook keeps a snapshot that looks the same
+      // (unchanged from before R3-1350). A frontmatter block the parser REJECTS is not this case: the file was
       // read, and it says something the board cannot show, so it goes straight to overflow
       // below, display-only (§4.3 rule 4) — holding its old card would show a stale column
       // for as long as the file stays broken, because the polling hook keeps the previous
@@ -651,8 +652,8 @@ const REJECTED = Symbol('rejected');
 
 /** One record through the canonical parser (`@immediately-run/mdx-plugins` — never a
  *  regex, never a second YAML library). The two failures are told apart because the board
- *  treats them differently: an UNREADABLE file keeps the reader's previous card for the
- *  cycle; a REJECTED block (the parser never throws since 0.8.0 — it reports the block in
+ *  treats them differently: an UNREADABLE file keeps the reader's previous card until it
+ *  reads again; a REJECTED block (the parser never throws since 0.8.0 — it reports the block in
  *  `error`, R3-1350 review 1-B-0) is shown display-only in overflow. Neither ever becomes
  *  an empty record that replaces a good card. */
 async function readRecord(path: string): Promise<object | typeof UNREADABLE | typeof REJECTED> {
