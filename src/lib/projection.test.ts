@@ -268,45 +268,37 @@ describe('the roadmap board over the real marker, layout and records (R3-549)', 
     expect(cardsIn(snap!.cards, 'available').map((c) => c.id)).toEqual(['R3-658']);
   });
 
-  it('a record whose frontmatter stops parsing keeps the reader\'s card; with no previous card it is display-only (R3-1350)', async () => {
-    // Review 1-B-0: the 0.8.0 parser never throws — it reports a rejected block in
-    // `error`. A half-written record (`title: a: b`) must read as unreadable, not as an
-    // empty record that replaces the good card with a stem-titled overflow card.
+  it('a record whose frontmatter stops parsing goes straight to overflow, display-only (R3-1350)', async () => {
+    // The 0.8.0 parser never throws — it reports a rejected block in `error` (review 1-B-0).
+    // The file WAS read, so this is not the unreadable-mid-poll case: holding its previous
+    // card would show a stale column for as long as the file stays broken, because the
+    // polling hook keeps the previous snapshot whenever the new one looks the same (reviews
+    // 1-A-0, 2-r2-0). It goes to overflow at once (§4.3 rule 4) and recovers on repair.
     const view = makeView();
     scratch.push(view);
     const good = '---\ntitle: "Was parseable"\nid: R3-9710\nstatus: in-progress\norder: 1\nupdated: 2026-09-19\n---\n\nBody.\n';
-    const broken = '---\ntitle: a: b\nid: R3-9710\nstatus: in-progress\n---\n\nBody.\n';
+    const broken = '---\ntitle: a: b\nid: R3-9710\nstatus: done\n---\n\nBody.\n';
     writeFileSync(join(view, 'R3-9710.mdx'), good);
     const { store, projection } = projectedOver(view);
     const first = await readProjectedBoard(store, projection);
     expect(cardsIn(first!.cards, 'in-progress').map((c) => c.id)).toEqual(['R3-9710']);
 
     writeFileSync(join(view, 'R3-9710.mdx'), broken);
+    // With the reader's previous snapshot, as the hook passes it: never the stale card.
     const second = await readProjectedBoard(store, projection, first!);
-    const kept = second!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
-    expect(kept.title).toBe('Was parseable');
-    expect(kept.column).toBe('in-progress');
-
-    // Review 1-A-0: held over for ONE cycle only. Still broken on the next poll, it goes
-    // to overflow display-only (§4.3 rule 4) — and stays there on the poll after.
-    const third = await readProjectedBoard(store, projection, second!);
-    const moved = third!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
-    expect(moved.column).toBe(projection.overflowId);
-    expect(moved.title).toBe('R3-9710');
-    const fourth = await readProjectedBoard(store, projection, third!);
-    expect(fourth!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe(projection.overflowId);
-
-    // Fixed again, it is a normal card at once.
-    writeFileSync(join(view, 'R3-9710.mdx'), good);
-    const fifth = await readProjectedBoard(store, projection, fourth!);
-    expect(fifth!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe('in-progress');
-
-    // A first read with no previous card: display-only in overflow, titled by the stem.
-    writeFileSync(join(view, 'R3-9710.mdx'), broken);
-    const cold = await readProjectedBoard(store, projection);
-    const shown = cold!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
+    const shown = second!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!;
     expect(shown.column).toBe(projection.overflowId);
     expect(shown.title).toBe('R3-9710');
+    expect(shown.description).toBe('');
+    // The hook may hand back the SAME previous snapshot again (it keeps a canon-equal one):
+    // the answer does not change.
+    const again = await readProjectedBoard(store, projection, first!);
+    expect(again!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe(projection.overflowId);
+
+    // Repaired, it is a normal card at once.
+    writeFileSync(join(view, 'R3-9710.mdx'), good);
+    const fixed = await readProjectedBoard(store, projection, second!);
+    expect(fixed!.cards.find((c) => c.sourcePath === 'R3-9710.mdx')!.column).toBe('in-progress');
   });
 
   it('a record that becomes unreadable mid-poll keeps the reader\'s card for that cycle', async () => {

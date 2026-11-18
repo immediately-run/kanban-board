@@ -555,15 +555,6 @@ const orderOf = (v: unknown): number => {
  * render as text downstream; the body rides `description` until the card modal renders
  * it through safe-content.
  */
-/** The record files each snapshot showed from its PREVIOUS snapshot because they could not
- *  be read or parsed (the mid-poll fallback below). Keyed weakly by snapshot, so it holds
- *  nothing a reader has dropped and any number of boards share it safely. It is what limits
- *  the fallback to ONE cycle: a record still unreadable on the next poll is not held over
- *  again but goes to overflow, display-only (§4.3 rule 4) — without it a record that stayed
- *  broken kept its stale card in its old column for as long as the reader polled (R3-1350
- *  review 1-A-0). */
-const heldOver = new WeakMap<BoardSnapshot, ReadonlySet<string>>();
-
 export async function readProjectedBoard(
   store: ProjectedStore,
   projection: ResolvedProjection,
@@ -582,25 +573,26 @@ export async function readProjectedBoard(
   // up the reader's previous copy of the SAME record, and an id the frontmatter names
   // need not equal the filename stem.
   const prev = new Map((previous?.cards ?? []).map((c) => [c.sourcePath, c]));
-  const prevHeld = (previous && heldOver.get(previous)) ?? new Set<string>();
-  const held = new Set<string>();
   const cards: Card[] = [];
   for (const name of names.sort()) {
     if (name.startsWith('.') || !select.test(name)) continue;
     const stem = name.replace(/\.mdx?$/, '');
-    const record = await readRecord(`${sourceDir}/${name}`);
-    if (record === null) {
-      // Unreadable or unparseable mid-poll: keep the reader's copy of the card for THIS
-      // cycle (the native read layer's own precedent) rather than dropping it — once. A
-      // card that was itself held over last cycle is not held again: the record is
-      // treated as unreadable below (overflow, display-only).
+    const read = await readRecord(`${sourceDir}/${name}`);
+    if (read === UNREADABLE) {
+      // Unreadable mid-poll (the file could not be read at all): keep the reader's copy of
+      // the card for this cycle (the native read layer's own precedent) rather than
+      // dropping it. A frontmatter block the parser REJECTS is not this case: the file was
+      // read, and it says something the board cannot show, so it goes straight to overflow
+      // below, display-only (§4.3 rule 4) — holding its old card would show a stale column
+      // for as long as the file stays broken, because the polling hook keeps the previous
+      // snapshot whenever a new one looks the same (R3-1350 reviews 1-A-0, 2-r2-0).
       const fallback = prev.get(name);
-      if (fallback && !prevHeld.has(name)) {
+      if (fallback) {
         cards.push(fallback);
-        held.add(name);
         continue;
       }
     }
+    const record = read === UNREADABLE || read === REJECTED ? null : read;
     const column = record === null ? undefined : asText(fieldOf(record, map.column?.from ?? ''));
     const inColumn = column !== undefined && values.includes(column);
     if (record === null || !inColumn) {
@@ -649,22 +641,25 @@ export async function readProjectedBoard(
       sourcePath: name,
     });
   }
-  const snapshot: BoardSnapshot = { meta: projectedBoardMeta(store), cards };
-  if (held.size) heldOver.set(snapshot, held);
-  return snapshot;
+  return { meta: projectedBoardMeta(store), cards };
 }
 
+/** A record file that could not be read at all. */
+const UNREADABLE = Symbol('unreadable');
+/** A record file that was read but whose frontmatter block the parser rejects. */
+const REJECTED = Symbol('rejected');
+
 /** One record through the canonical parser (`@immediately-run/mdx-plugins` — never a
- *  regex, never a second YAML library). A read failure or a frontmatter block the parser
- *  rejects is `null`: the caller keeps the previous card for that cycle, or shows the
- *  record display-only — never an empty record that replaces a good card. Since 0.8.0
- *  (R3-1347) the parser never throws; it reports a rejected block in `error`, so that is
- *  what is checked here (R3-1350 review 1-B-0). */
-async function readRecord(path: string): Promise<object | null> {
+ *  regex, never a second YAML library). The two failures are told apart because the board
+ *  treats them differently: an UNREADABLE file keeps the reader's previous card for the
+ *  cycle; a REJECTED block (the parser never throws since 0.8.0 — it reports the block in
+ *  `error`, R3-1350 review 1-B-0) is shown display-only in overflow. Neither ever becomes
+ *  an empty record that replaces a good card. */
+async function readRecord(path: string): Promise<object | typeof UNREADABLE | typeof REJECTED> {
   const text = await readText(path);
-  if (text === null) return null;
+  if (text === null) return UNREADABLE;
   const { data, body, error } = parseFrontmatter(text);
-  if (error) return null;
+  if (error) return REJECTED;
   return buildRecord(data as Record<string, unknown>, body);
 }
 
